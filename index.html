@@ -34,6 +34,7 @@ let IS_PLAYER = false;    // jugador logueado
 let PLAYER_KEY = null;    // key del jugador logueado
 let currentPage = 'home';
 let playerFilter = 'todos';
+let playerSearch = '';
 let rankMode = 'points';
 let selIds = new Set();
 let tempGoals={}, tempYellow={}, tempRed={};
@@ -120,6 +121,18 @@ function statusBadge(p){
   return '';
 }
 function getDevId(){let id=localStorage.getItem('pfm_dev');if(!id){id='d_'+Math.random().toString(36).slice(2);localStorage.setItem('pfm_dev',id);}return id;}
+
+function homeQuickAction(page, navIdx, tab){
+  const btn=document.querySelector(`.nav-btn:nth-child(${navIdx})`);
+  showPage(page, btn);
+  if(tab&&page==='partidos') switchTab(tab, el('tab-'+tab));
+}
+function openTopPlayer(){
+  const players=pArr();
+  if(!players.length){toast('⚠️ No hay jugadores');return;}
+  const top=[...players].sort((a,b)=>calcPts(b._key)-calcPts(a._key))[0];
+  if(top) openProfile(top._key);
+}
 
 // Elige capitán: aleatorio entre los jugadores del equipo
 function pickCap(team){ return team[Math.floor(Math.random()*team.length)]||team[0]; }
@@ -224,15 +237,6 @@ function calcPts(key){
   }
   return pts+(S.players[key]?.bonusPoints||0);
 }
-
-window.changeBonus=(key,delta,ev)=>adminOnly(async()=>{
-  ev?.stopPropagation?.();
-  const current=S.players[key]?.bonusPoints||0;
-  const next=current+delta;
-  await update(ref(db,`players/${key}`),{bonusPoints:next});
-  const sign=delta>0?'+':'';
-  toast(`🎯 Puntos extra ${sign}${delta} · Total ${next>0?'+':''}${next}`);
-});
 function calcStreak(key){
   const ms=getMs(key).reverse();let s=0;
   for(const m of ms){const inA=(m.teamA?.players||[]).includes(key);const won=(m.winner==='A'&&inA)||(m.winner==='B'&&!inA);if(won)s++;else break;}
@@ -247,10 +251,14 @@ function streakBadge(s){
 }
 
 // ── HOME ───────────────────────────────────────────────
+
 function renderHome(){
   const players=pArr(), matches=mArr();
   const pagados=players.filter(p=>p.pay==='pagado').length;
   const pendientes=players.filter(p=>p.pay!=='pagado').length;
+  const lesionados=players.filter(p=>p.lesionado||p.sancionado).length;
+  const topPlayer=[...players].sort((a,b)=>calcPts(b._key)-calcPts(a._key))[0]||null;
+  const latestMatch=[...matches].sort((a,b)=>new Date(b.date)-new Date(a.date))[0]||null;
   
   el('home-peña-name').textContent=(S.config.peña||'Peña 3 Tiempo').toUpperCase();
   const freqLabel = {1:'mes',3:'trimestre',6:'semestre',12:'año'}[S.config.frecuencia||1]||'mes';
@@ -261,15 +269,46 @@ function renderHome(){
     <div class="stat-card"><div class="sv" style="color:#ffd700">${players.length}</div><div class="sl">Jugadores</div></div>
     <div class="stat-card"><div class="sv" style="color:#7c3aed">${matches.length}</div><div class="sl">Partidos</div></div>`;
 
+  el('home-quick-actions').innerHTML=`
+    <button class="quick-btn" onclick="homeQuickAction('jugadores',2)">👥<span>Jugadores</span></button>
+    <button class="quick-btn" onclick="homeQuickAction('partidos',3,'crear')">⚽<span>Crear Partido</span></button>
+    <button class="quick-btn" onclick="homeQuickAction('ranking',4)">🏆<span>Ranking</span></button>
+    <button class="quick-btn" onclick="homeQuickAction('caja',5)">💰<span>Caja</span></button>`;
+
+  const now=new Date();
+  const upcoming=S.events.filter(e=>new Date(e.date+'T12:00:00')>=now).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const ne=upcoming[0];
+  const pendingPlayers=players.filter(p=>p.pay!=='pagado');
+  const latestNews=[...S.news].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,2);
+
+  el('home-dashboard').innerHTML=`
+    <div class="dash-card ${S.activeMatch?'clickable':''}" ${S.activeMatch?`onclick="showPage('partidos',document.querySelector('.nav-btn:nth-child(3)'));switchTab('activo',el('tab-activo'))"`:''}>
+      <div class="dash-kicker">⚽ Partido</div>
+      <div class="dash-title">${S.activeMatch?`${S.activeMatch.teamA?.name||'Morado'} ${S.activeMatch.scoreA||0}-${S.activeMatch.scoreB||0} ${S.activeMatch.teamB?.name||'Amarillo'}`:(ne?`${ne.emoji||'📅'} ${ne.title}`:'Sin partido activo')}</div>
+      <div class="dash-sub">${S.activeMatch?'Toca para ver el directo':(ne?`${fDate(ne.date)}${ne.lugar?' · '+ne.lugar:''}`:'Crea un partido o añade un evento')}</div>
+    </div>
+    <div class="dash-card ${pendingPlayers.length?'clickable':''}" ${pendingPlayers.length?`onclick="showPage('jugadores',document.querySelector('.nav-btn:nth-child(2)'))"`:''}>
+      <div class="dash-kicker">💸 Cuotas</div>
+      <div class="dash-title">${pendingPlayers.length?`${pendingPlayers.length} pendientes`:'Todo al día'}</div>
+      <div class="dash-sub">${pendingPlayers.length?pendingPlayers.slice(0,2).map(p=>p.name).join(', '):'Nadie debe cuota ahora mismo'}</div>
+    </div>
+    <div class="dash-card ${topPlayer?'clickable':''}" ${topPlayer?`onclick="openProfile('${topPlayer._key}')"`:''}>
+      <div class="dash-kicker">🏅 Destacado</div>
+      <div class="dash-title">${topPlayer?topPlayer.name:'Sin datos'}</div>
+      <div class="dash-sub">${topPlayer?`${calcPts(topPlayer._key)} pts · ${topPlayer.goals||0} goles`:'Añade partidos para ver líderes'}</div>
+    </div>
+    <div class="dash-card ${latestMatch?'clickable':''}" ${latestMatch?`onclick="showPage('partidos',document.querySelector('.nav-btn:nth-child(3)'));switchTab('historial',el('tab-historial'))"`:''}>
+      <div class="dash-kicker">📊 Último resultado</div>
+      <div class="dash-title">${latestMatch?`${latestMatch.teamA?.name||'A'} ${latestMatch.scoreA}-${latestMatch.scoreB} ${latestMatch.teamB?.name||'B'}`:'Sin historial'}</div>
+      <div class="dash-sub">${latestMatch?fDate(latestMatch.date):'Cuando cierres partidos aparecerá aquí'}</div>
+    </div>`;
+
   // Cumpleaños hoy
   const today=new Date();const todayMD=`${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
   const bdayPlayers=players.filter(p=>p.bday&&p.bday.slice(5)===todayMD);
   el('home-bday').innerHTML=bdayPlayers.length?bdayPlayers.map(p=>`<div class="alert alert-gold">🎂 ¡Hoy es el cumpleaños de <b>${p.name}</b>! ¡Felicidades! 🎉</div>`).join(''):'';
 
   // Próximo evento
-  const now=new Date();
-  const upcoming=S.events.filter(e=>new Date(e.date+'T12:00:00')>=now).sort((a,b)=>new Date(a.date)-new Date(b.date));
-  const ne=upcoming[0];
   el('home-next-event').innerHTML=ne?`<div class="ev-card">
     <div style="font-size:11px;color:var(--mu);text-transform:uppercase;font-weight:600;letter-spacing:.5px">Próximo Evento</div>
     <div style="font-family:var(--fd);font-size:22px;margin:4px 0">${ne.emoji||'📅'} ${ne.title}</div>
@@ -284,55 +323,50 @@ function renderHome(){
   el('home-mvp').innerHTML=S.activeMatch?.mvpVoting?`<div class="alert alert-info" style="cursor:pointer" onclick="openMvpVote()">🗳️ <b>¡Vota al MVP!</b> El partido ha terminado. <span style="color:var(--ac)">Votar →</span></div>`:'';
 
   // Noticias recientes
-  const latestNews=[...S.news].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,2);
   el('home-news').innerHTML=latestNews.length?latestNews.map(n=>`<div class="news-card"><div style="font-size:10px;color:var(--mu);margin-bottom:4px">${fDateS(n.date)}</div><div style="font-weight:600;font-size:14px;margin-bottom:4px">${n.emoji||'📢'} ${n.title}</div><div style="font-size:12px;color:var(--mu);line-height:1.5">${n.body}</div></div>`).join(''):'<div class="empty-state" style="padding:20px"><div class="icon">📢</div><p>Sin noticias</p></div>';
 
   // Pagos pendientes
-  const pending=players.filter(p=>p.pay!=='pagado');
-  el('home-pending').innerHTML=!pending.length?'<div class="alert alert-ok">✅ ¡Todos al día con la cuota!</div>':pending.slice(0,4).map(p=>`
+  el('home-pending').innerHTML=!pendingPlayers.length?'<div class="alert alert-ok">✅ ¡Todos al día con la cuota!</div>':pendingPlayers.slice(0,4).map(p=>`
     <div class="player-item">
       ${ava(p)}
-      <div class="pi"><div class="pn">${p.name}</div><div class="ps">Sin especificar</div></div>
+      <div class="pi"><div class="pn">${p.name}</div><div class="ps">${p.pos||'Sin especificar'}</div></div>
       <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
         ${payBadge(p.pay)}
         ${p.phone&&IS_ADMIN?`<button onclick="waReminder('${p._key}')" style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);color:#25d366;border-radius:8px;padding:3px 8px;font-size:10px;cursor:pointer;font-weight:700">📲 Recordar</button>`:''}
       </div>
-    </div>`).join('')+(pending.length>4?`<div style="text-align:center;color:var(--mu);font-size:12px;margin-top:6px">y ${pending.length-4} más...</div>`:'');
+    </div>`).join('')+(pendingPlayers.length>4?`<div style="text-align:center;color:var(--mu);font-size:12px;margin-top:6px">y ${pendingPlayers.length-4} más...</div>`:'');
 }
 
 // ── PLAYERS ────────────────────────────────────────────
+
+
 function renderPlayers(){
   document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
   let list=pArr();
+  const q=(playerSearch||'').trim().toLowerCase();
   if(playerFilter==='lesionados')list=list.filter(p=>p.lesionado||p.sancionado);
   else if(playerFilter!=='todos')list=list.filter(p=>p.pay===playerFilter);
+  if(q) list=list.filter(p=>`${p.name||''} ${p.pos||''} ${p.num||''}`.toLowerCase().includes(q));
   const cont=el('jugadores-list');
-  if(!list.length){cont.innerHTML=`<div class="empty-state"><div class="icon">👤</div><p>${IS_ADMIN?'Pulsa + para añadir':'Sin jugadores'}</p></div>`;return;}
+  const counter=el('jugadores-counter');
+  if(counter) counter.textContent=`${list.length} resultado${list.length===1?'':'s'}`;
+  if(!list.length){cont.innerHTML=`<div class="empty-state"><div class="icon">👤</div><p>${q?'No hay coincidencias para tu búsqueda':(IS_ADMIN?'Pulsa + para añadir':'Sin jugadores')}</p></div>`;return;}
   cont.innerHTML=list.map(p=>{
     const badges=getBadges(p).slice(0,3);
     const streak=calcStreak(p._key);
     const cuota=S.config.cuota||20;
-    const deuda=p.pay!=='pagado'?cuota:0;
-    const bonus=p.bonusPoints||0;
+    const deuda = p.pay !== 'pagado' ? cuota : 0;
     const canEdit = IS_ADMIN || (IS_PLAYER && PLAYER_KEY===p._key);
-    const bonusControls=IS_ADMIN?`<div style="display:flex;align-items:center;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
-      <button onclick="changeBonus('${p._key}',-3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.18);color:#ff8f8f;font-weight:900;font-size:12px;cursor:pointer">-3</button>
-      <button onclick="changeBonus('${p._key}',-1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.12);color:#ff6b6b;font-weight:900;font-size:12px;cursor:pointer">-1</button>
-      <div style="min-width:82px;text-align:center;padding:5px 8px;border-radius:10px;background:rgba(165,94,234,.14);border:1px solid rgba(165,94,234,.28);color:#d6b3ff;font-size:11px;font-weight:800">Extra ${bonus>0?'+':''}${bonus}</div>
-      <button onclick="changeBonus('${p._key}',1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.12);color:#00ff88;font-weight:900;font-size:12px;cursor:pointer">+1</button>
-      <button onclick="changeBonus('${p._key}',3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.2);color:#72ffb4;font-weight:900;font-size:12px;cursor:pointer">+3</button>
-    </div>`:(bonus?`<div style="margin-top:6px;font-size:11px;color:#d6b3ff;font-weight:700">Extra ${bonus>0?'+':''}${bonus}</div>`:'');
     return`<div class="player-item" onclick="${canEdit?`openSelfEdit('${p._key}')`:''}" style="${canEdit?'cursor:pointer':''}">
       ${ava(p)}
       <div class="pi">
-        <div class="pn">#${p.num||'-'} ${p.name} ${streakBadge(streak)} ${formaHtml(p._key)} ${statusBadge(p)} ${IS_PLAYER&&PLAYER_KEY===p._key?'<span style="font-size:10px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);border-radius:10px;padding:2px 6px;font-weight:700">YO</span>':''}</div>
+        <div class="pn">#${p.num||'-'} ${p.name} ${streakBadge(streak)} ${typeof formaHtml==='function'?formaHtml(p._key):''} ${statusBadge(p)} ${IS_PLAYER&&PLAYER_KEY===p._key?'<span style="font-size:10px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);border-radius:10px;padding:2px 6px;font-weight:700">YO</span>':''}</div>
         <div class="ps">${p.pos||''} · ⚽${p.goals||0} 🏆${p.wins||0} 🎯${calcPts(p._key)}pts</div>
         ${badges.length?`<div style="margin-top:3px">${badges.map(b=>`<span title="${b.name}" style="font-size:13px">${b.icon}</span>`).join(' ')}</div>`:''}
-        ${bonusControls}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${payBadge(p.pay)}
-        ${deuda>0?`<div style="font-size:10px;color:#ff4757">Pend.</div>`:''}
+        ${deuda>0?`<div style="font-size:10px;color:#ff4757">-${deuda}€</div>`:''}
         ${p.bday?`<div style="font-size:10px;color:var(--mu)">🎂 ${fDateS(p.bday)}</div>`:''}
       </div>
     </div>`;}).join('');
@@ -342,6 +376,8 @@ window.filterP=(f,e)=>{
   document.querySelectorAll('#page-jugadores .chip-row .chip').forEach(c=>c.classList.remove('active'));
   e.classList.add('active');renderPlayers();
 };
+window.searchPlayers=(val)=>{playerSearch=val||''; renderPlayers();};
+
 
 // WhatsApp reminder
 window.waReminder=(key)=>{
@@ -1223,7 +1259,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
+    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(''+team+'','+posIndex+','+i+'')">'
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1240,7 +1276,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
+    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(''+team+'','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
   openM('modal-swap-player');
 };
 
@@ -1602,6 +1638,18 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .toggle-slider::after{content:'';position:absolute;left:3px;top:3px;width:18px;height:18px;background:var(--mu);border-radius:50%;transition:.2s}
 .toggle input:checked+.toggle-slider{background:rgba(124,58,237,.2);border:1px solid #7c3aed}
 .toggle input:checked+.toggle-slider::after{transform:translateX(20px);background:#7c3aed}
+
+.quick-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0 14px}
+.quick-btn{background:linear-gradient(180deg,rgba(18,34,65,.95),rgba(10,22,40,.95));border:1px solid rgba(124,58,237,.25);color:var(--tx);border-radius:16px;padding:12px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:18px;min-height:78px;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+.quick-btn span{font-size:11px;font-weight:700;letter-spacing:.2px;color:#d8ddff;text-align:center;line-height:1.15}
+.dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 16px}
+.dash-card{background:linear-gradient(180deg,rgba(18,34,65,.98),rgba(8,18,34,.98));border:1px solid rgba(124,58,237,.22);border-radius:18px;padding:14px;box-shadow:0 10px 24px rgba(0,0,0,.2);min-height:106px}
+.dash-card.clickable{cursor:pointer}
+.dash-kicker{font-size:11px;text-transform:uppercase;color:var(--mu);font-weight:700;letter-spacing:.6px;margin-bottom:6px}
+.dash-title{font-family:var(--fd);font-size:20px;line-height:1.05;color:#fff;margin-bottom:6px}
+.dash-sub{font-size:12px;line-height:1.35;color:#b5bfdc}
+@media (max-width:420px){.quick-grid{grid-template-columns:repeat(2,1fr)}.dashboard-grid{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -1646,6 +1694,8 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <div id="home-mvp"></div>
   <div id="home-active"></div>
   <div class="stats-grid" id="home-stats"></div>
+  <div id="home-quick-actions" class="quick-grid"></div>
+  <div id="home-dashboard" class="dashboard-grid"></div>
   <div class="section-title"><div class="dot"></div>Próximo Evento</div>
   <div id="home-next-event"></div>
   <div class="section-title"><div class="dot"></div>Últimas Noticias</div>
@@ -1657,6 +1707,12 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 <!-- JUGADORES -->
 <div class="page" id="page-jugadores">
   <div class="section-title"><div class="dot"></div>Jugadores</div>
+  <div class="card" style="padding:12px;margin-bottom:10px">
+    <input id="players-search" class="form-input" placeholder="🔎 Buscar jugador por nombre, dorsal o posición" oninput="searchPlayers(this.value)" style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--mu);font-size:12px">
+      <span>Encuentra rápido a cualquier jugador</span><span id="jugadores-counter">0 resultados</span>
+    </div>
+  </div>
   <div class="chip-row">
     <div class="chip active" onclick="filterP('todos',this)">Todos</div>
     <div class="chip" onclick="filterP('pagado',this)">✅ Pagado</div>

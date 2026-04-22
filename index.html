@@ -122,7 +122,7 @@ function statusBadge(p){
 }
 function getDevId(){let id=localStorage.getItem('pfm_dev');if(!id){id='d_'+Math.random().toString(36).slice(2);localStorage.setItem('pfm_dev',id);}return id;}
 
-function homeQuickAction(page, navIdx, tab){
+window.homeQuickAction=(page, navIdx, tab)=>{
   const btn=document.querySelector(`.nav-btn:nth-child(${navIdx})`);
   showPage(page, btn);
   if(tab&&page==='partidos') switchTab(tab, el('tab-'+tab));

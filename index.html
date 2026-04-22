@@ -1223,7 +1223,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(''+team+'','+posIndex+','+i+'')">'
+    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1240,7 +1240,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(''+team+'','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
+    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
   openM('modal-swap-player');
 };
 

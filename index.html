@@ -224,6 +224,15 @@ function calcPts(key){
   }
   return pts+(S.players[key]?.bonusPoints||0);
 }
+
+window.changeBonus=(key,delta,ev)=>adminOnly(async()=>{
+  ev?.stopPropagation?.();
+  const current=S.players[key]?.bonusPoints||0;
+  const next=current+delta;
+  await update(ref(db,`players/${key}`),{bonusPoints:next});
+  const sign=delta>0?'+':'';
+  toast(`🎯 Puntos extra ${sign}${delta} · Total ${next>0?'+':''}${next}`);
+});
 function calcStreak(key){
   const ms=getMs(key).reverse();let s=0;
   for(const m of ms){const inA=(m.teamA?.players||[]).includes(key);const won=(m.winner==='A'&&inA)||(m.winner==='B'&&!inA);if(won)s++;else break;}
@@ -303,17 +312,27 @@ function renderPlayers(){
     const badges=getBadges(p).slice(0,3);
     const streak=calcStreak(p._key);
     const cuota=S.config.cuota||20;
+    const deuda=p.pay!=='pagado'?cuota:0;
+    const bonus=p.bonusPoints||0;
     const canEdit = IS_ADMIN || (IS_PLAYER && PLAYER_KEY===p._key);
+    const bonusControls=IS_ADMIN?`<div style="display:flex;align-items:center;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
+      <button onclick="changeBonus('${p._key}',-3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.18);color:#ff8f8f;font-weight:900;font-size:12px;cursor:pointer">-3</button>
+      <button onclick="changeBonus('${p._key}',-1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.12);color:#ff6b6b;font-weight:900;font-size:12px;cursor:pointer">-1</button>
+      <div style="min-width:82px;text-align:center;padding:5px 8px;border-radius:10px;background:rgba(165,94,234,.14);border:1px solid rgba(165,94,234,.28);color:#d6b3ff;font-size:11px;font-weight:800">Extra ${bonus>0?'+':''}${bonus}</div>
+      <button onclick="changeBonus('${p._key}',1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.12);color:#00ff88;font-weight:900;font-size:12px;cursor:pointer">+1</button>
+      <button onclick="changeBonus('${p._key}',3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.2);color:#72ffb4;font-weight:900;font-size:12px;cursor:pointer">+3</button>
+    </div>`:(bonus?`<div style="margin-top:6px;font-size:11px;color:#d6b3ff;font-weight:700">Extra ${bonus>0?'+':''}${bonus}</div>`:'');
     return`<div class="player-item" onclick="${canEdit?`openSelfEdit('${p._key}')`:''}" style="${canEdit?'cursor:pointer':''}">
       ${ava(p)}
       <div class="pi">
         <div class="pn">#${p.num||'-'} ${p.name} ${streakBadge(streak)} ${formaHtml(p._key)} ${statusBadge(p)} ${IS_PLAYER&&PLAYER_KEY===p._key?'<span style="font-size:10px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);border-radius:10px;padding:2px 6px;font-weight:700">YO</span>':''}</div>
         <div class="ps">${p.pos||''} · ⚽${p.goals||0} 🏆${p.wins||0} 🎯${calcPts(p._key)}pts</div>
         ${badges.length?`<div style="margin-top:3px">${badges.map(b=>`<span title="${b.name}" style="font-size:13px">${b.icon}</span>`).join(' ')}</div>`:''}
+        ${bonusControls}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${payBadge(p.pay)}
-        ${p.pay !== 'pagado' ? `<div style="font-size:10px;color:#ff4757">Pend.</div>` : ''}
+        ${deuda>0?`<div style="font-size:10px;color:#ff4757">Pend.</div>`:''}
         ${p.bday?`<div style="font-size:10px;color:var(--mu)">🎂 ${fDateS(p.bday)}</div>`:''}
       </div>
     </div>`;}).join('');
@@ -1204,7 +1223,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}', ${posIndex}, ${i})">'
+    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1221,7 +1240,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + '<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}', ${posIndex})">➡️ Mover a '+otherTeamLabel+'</button>';
+    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
   openM('modal-swap-player');
 };
 

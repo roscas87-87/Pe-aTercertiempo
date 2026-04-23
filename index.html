@@ -8,11 +8,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Peña 3 Tiempo">
 <title>Peña 3 Tiempo</title>
-
 <link rel="icon" type="image/png" href="logo.png">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="theme-color" content="#0b1220">
-
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -232,15 +230,6 @@ function calcPts(key){
   }
   return pts+(S.players[key]?.bonusPoints||0);
 }
-
-window.changeBonus=(key,delta,ev)=>adminOnly(async()=>{
-  ev?.stopPropagation?.();
-  const current=S.players[key]?.bonusPoints||0;
-  const next=current+delta;
-  await update(ref(db,`players/${key}`),{bonusPoints:next});
-  const sign=delta>0?'+':'';
-  toast(`🎯 Puntos extra ${sign}${delta} · Total ${next>0?'+':''}${next}`);
-});
 function calcStreak(key){
   const ms=getMs(key).reverse();let s=0;
   for(const m of ms){const inA=(m.teamA?.players||[]).includes(key);const won=(m.winner==='A'&&inA)||(m.winner==='B'&&!inA);if(won)s++;else break;}
@@ -320,23 +309,13 @@ function renderPlayers(){
     const badges=getBadges(p).slice(0,3);
     const streak=calcStreak(p._key);
     const cuota=S.config.cuota||20;
-    const deuda=p.pay!=='pagado'?cuota:0;
-    const bonus=p.bonusPoints||0;
     const canEdit = IS_ADMIN || (IS_PLAYER && PLAYER_KEY===p._key);
-    const bonusControls=IS_ADMIN?`<div style="display:flex;align-items:center;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
-      <button onclick="changeBonus('${p._key}',-3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.18);color:#ff8f8f;font-weight:900;font-size:12px;cursor:pointer">-3</button>
-      <button onclick="changeBonus('${p._key}',-1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.12);color:#ff6b6b;font-weight:900;font-size:12px;cursor:pointer">-1</button>
-      <div style="min-width:82px;text-align:center;padding:5px 8px;border-radius:10px;background:rgba(165,94,234,.14);border:1px solid rgba(165,94,234,.28);color:#d6b3ff;font-size:11px;font-weight:800">Extra ${bonus>0?'+':''}${bonus}</div>
-      <button onclick="changeBonus('${p._key}',1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.12);color:#00ff88;font-weight:900;font-size:12px;cursor:pointer">+1</button>
-      <button onclick="changeBonus('${p._key}',3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.2);color:#72ffb4;font-weight:900;font-size:12px;cursor:pointer">+3</button>
-    </div>`:(bonus?`<div style="margin-top:6px;font-size:11px;color:#d6b3ff;font-weight:700">Extra ${bonus>0?'+':''}${bonus}</div>`:'');
     return`<div class="player-item" onclick="${canEdit?`openSelfEdit('${p._key}')`:''}" style="${canEdit?'cursor:pointer':''}">
       ${ava(p)}
       <div class="pi">
         <div class="pn">#${p.num||'-'} ${p.name} ${streakBadge(streak)} ${formaHtml(p._key)} ${statusBadge(p)} ${IS_PLAYER&&PLAYER_KEY===p._key?'<span style="font-size:10px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);border-radius:10px;padding:2px 6px;font-weight:700">YO</span>':''}</div>
         <div class="ps">${p.pos||''} · ⚽${p.goals||0} 🏆${p.wins||0} 🎯${calcPts(p._key)}pts</div>
         ${badges.length?`<div style="margin-top:3px">${badges.map(b=>`<span title="${b.name}" style="font-size:13px">${b.icon}</span>`).join(' ')}</div>`:''}
-        ${bonusControls}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${payBadge(p.pay)}
@@ -1231,7 +1210,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
+    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(''+team+'','+posIndex+','+i+'')">'
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1248,7 +1227,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
+    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(''+team+'','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
   openM('modal-swap-player');
 };
 
@@ -1686,6 +1665,28 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <div style="margin-top:10px;font-size:11px;color:#00ff88;display:inline-flex;align-items:center;gap:5px;background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.2);border-radius:20px;padding:4px 12px"><span class="live-dot"></span> Datos en tiempo real</div>
     </div>
   </div>
+
+  <div id="home-quick-menu" class="quick-menu">
+    <button class="quick-btn" onclick="showPage('jugadores', document.querySelector('.nav-btn:nth-child(2)'))">
+      <span>👥</span><small>Jugadores</small>
+    </button>
+    <button class="quick-btn" onclick="showPage('partidos', document.querySelector('.nav-btn:nth-child(3)'))">
+      <span>⚽</span><small>Partidos</small>
+    </button>
+    <button class="quick-btn" onclick="showPage('ranking', document.querySelector('.nav-btn:nth-child(4)'))">
+      <span>🏆</span><small>Ranking</small>
+    </button>
+    <button class="quick-btn" onclick="showPage('noticias', null)">
+      <span>📢</span><small>Noticias</small>
+    </button>
+    <button class="quick-btn" onclick="showPage('caja', null)">
+      <span>💰</span><small>Caja</small>
+    </button>
+    <button class="quick-btn" onclick="showPage('chat', null)">
+      <span>💬</span><small>Chat</small>
+    </button>
+  </div>
+
   <div id="home-bday"></div>
   <div id="home-mvp"></div>
   <div id="home-active"></div>

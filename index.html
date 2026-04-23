@@ -775,10 +775,7 @@ window.sendRankingWA=()=>{
     `${i+1}. ${p.name} - ${p.points} pts | ${p.wins||0}V ${p.draws||0}E ${p.losses||0}D | ⚽${p.goals||0}`
   ).join('\n');
 
-  const msg =
-    `🏆 *Clasificación ${pena}*\n\n` +
-    lines;
-
+  const msg = `🏆 *Clasificación ${pena}*\n\n${lines}`;
   window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
 };
 
@@ -1722,7 +1719,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chip" onclick="switchRank('mvp',this)">⭐ MVP</div>
     <div class="chip" onclick="switchRank('streak',this)">🔥 Racha</div>
   </div>
-  <button class="btn btn-secondary btn-full" style="margin:10px 0 14px" onclick="sendRankingWA()">
+  <button class="btn btn-secondary btn-full" onclick="sendRankingWA()" style="margin:10px 0 14px">
     📲 Enviar clasificación por WhatsApp
   </button>
   <div id="ranking-list"></div>

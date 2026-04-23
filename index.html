@@ -1210,7 +1210,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(''+team+'','+posIndex+','+i+'')">'
+    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(\''+team+'\','+posIndex+','+i+')">'
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1227,7 +1227,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(''+team+'','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
+    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(\''+team+'\','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
   openM('modal-swap-player');
 };
 
@@ -1611,20 +1611,9 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   box-shadow:0 6px 18px rgba(0,0,0,.18);
   cursor:pointer;
 }
-.quick-btn span{
-  font-size:22px;
-  line-height:1;
-}
-.quick-btn small{
-  font-size:11px;
-  font-weight:700;
-  color:#cfd8ff;
-  line-height:1.1;
-}
-.quick-btn:active{
-  transform:scale(.98);
-}
-
+.quick-btn span{font-size:22px;line-height:1;}
+.quick-btn small{font-size:11px;font-weight:700;color:#cfd8ff;line-height:1.1;}
+.quick-btn:active{transform:scale(.98);}
 </style>
 </head>
 <body>
@@ -1665,29 +1654,16 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <div style="margin-top:10px;font-size:11px;color:#00ff88;display:inline-flex;align-items:center;gap:5px;background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.2);border-radius:20px;padding:4px 12px"><span class="live-dot"></span> Datos en tiempo real</div>
     </div>
   </div>
-
-  <div id="home-quick-menu" class="quick-menu">
-    <button class="quick-btn" onclick="showPage('jugadores', document.querySelector('.nav-btn:nth-child(2)'))">
-      <span>👥</span><small>Jugadores</small>
-    </button>
-    <button class="quick-btn" onclick="showPage('partidos', document.querySelector('.nav-btn:nth-child(3)'))">
-      <span>⚽</span><small>Partidos</small>
-    </button>
-    <button class="quick-btn" onclick="showPage('ranking', document.querySelector('.nav-btn:nth-child(4)'))">
-      <span>🏆</span><small>Ranking</small>
-    </button>
-    <button class="quick-btn" onclick="showPage('noticias', null)">
-      <span>📢</span><small>Noticias</small>
-    </button>
-    <button class="quick-btn" onclick="showPage('caja', null)">
-      <span>💰</span><small>Caja</small>
-    </button>
-    <button class="quick-btn" onclick="showPage('chat', null)">
-      <span>💬</span><small>Chat</small>
-    </button>
-  </div>
-
-  <div id="home-bday"></div>
+  
+<div id="home-quick-menu" class="quick-menu">
+  <button class="quick-btn" onclick="showPage('jugadores', document.querySelector('.nav-btn:nth-child(2)'))"><span>👥</span><small>Jugadores</small></button>
+  <button class="quick-btn" onclick="showPage('partidos', document.querySelector('.nav-btn:nth-child(3)'))"><span>⚽</span><small>Partidos</small></button>
+  <button class="quick-btn" onclick="showPage('ranking', document.querySelector('.nav-btn:nth-child(4)'))"><span>🏆</span><small>Ranking</small></button>
+  <button class="quick-btn" onclick="showPage('noticias', null)"><span>📢</span><small>Noticias</small></button>
+  <button class="quick-btn" onclick="showPage('caja', null)"><span>💰</span><small>Caja</small></button>
+  <button class="quick-btn" onclick="showPage('chat', null)"><span>💬</span><small>Chat</small></button>
+</div>
+<div id="home-bday"></div>
   <div id="home-mvp"></div>
   <div id="home-active"></div>
   <div class="stats-grid" id="home-stats"></div>

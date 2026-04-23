@@ -749,13 +749,13 @@ function renderHistorial(){
     </div>`;}).join('');
 }
 
+
 window.sendRankingWA=()=>{
   const players=pArr();
   if(!players.length){
     toast('⚠️ No hay jugadores para compartir');
     return;
   }
-
   const ranked=players
     .map(p=>({
       ...p,
@@ -770,13 +770,12 @@ window.sendRankingWA=()=>{
 
   const pena=S.config.peña||'Peña 3 Tiempo';
   const top=ranked.slice(0,10);
-
   const lines=top.map((p,i)=>
     `${i+1}. ${p.name} - ${p.points} pts | ${p.wins||0}V ${p.draws||0}E ${p.losses||0}D | ⚽${p.goals||0}`
   ).join('\n');
 
-  const msg = `🏆 *Clasificación ${pena}*\n\n${lines}`;
-  window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+  const msg=`🏆 *Clasificación ${pena}*\n\n${lines}`;
+  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
 };
 
 window.sendWA=()=>{
@@ -1719,7 +1718,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chip" onclick="switchRank('mvp',this)">⭐ MVP</div>
     <div class="chip" onclick="switchRank('streak',this)">🔥 Racha</div>
   </div>
-  <button class="btn btn-secondary btn-full" onclick="sendRankingWA()" style="margin:10px 0 14px">
+  <button class="btn btn-secondary btn-full" style="margin:10px 0 14px" onclick="sendRankingWA()">
     📲 Enviar clasificación por WhatsApp
   </button>
   <div id="ranking-list"></div>

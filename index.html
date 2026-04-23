@@ -7,11 +7,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Peña 3 Tiempo">
-
-<link rel="icon" href="logo.png">
-<link rel="apple-touch-icon" href="logo.png">
-<meta name="theme-color" content="#0b1220">
-
 <title>Peña 3 Tiempo</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script type="module">
@@ -1478,6 +1473,20 @@ el('header-date').textContent=new Date().toLocaleDateString('es-ES',{day:'numeri
 el('match-date').valueAsDate=new Date();
 startListeners();
 toast('☁️ Conectado en tiempo real',1500);
+
+window.sendRankingWA=()=>{
+  try{
+    const players=pArr();
+    if(!players.length){ alert('No hay jugadores'); return;}
+    const ranked=players.map(p=>({...p,points:calcPts(p._key)}))
+    .sort((a,b)=>b.points-a.points);
+    const top=ranked.slice(0,10);
+    const lines=top.map((p,i)=>`${i+1}. ${p.name} - ${p.points} pts`).join('\n');
+    const msg=`🏆 Clasificación\n\n${lines}`;
+    window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+  }catch(e){console.error(e);}
+};
+
 </script>
 
 <style>
@@ -1712,7 +1721,8 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chip" onclick="switchRank('mvp',this)">⭐ MVP</div>
     <div class="chip" onclick="switchRank('streak',this)">🔥 Racha</div>
   </div>
-  <div id="ranking-list"></div>
+  <div id="ranking-list"
+<button onclick="sendRankingWA()" style="margin:10px 0;padding:10px;border-radius:10px">📲 Enviar clasificación por WhatsApp</button>></div>
 </div>
 
 <!-- CALENDARIO -->

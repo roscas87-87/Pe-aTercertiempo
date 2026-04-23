@@ -8,6 +8,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Peña 3 Tiempo">
 <title>Peña 3 Tiempo</title>
+
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+<meta name="theme-color" content="#0b1220">
+
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -131,7 +136,10 @@ window.showPage=(name,btn)=>{
   el('page-'+name).classList.add('active');
   btn?.classList.add('active');
   currentPage=name; go();
-  if(name==='partidos') switchTab('crear',el('tab-crear'));
+  if(name==='partidos'){
+    if(S.activeMatch) switchTab('activo',el('tab-activo'));
+    else switchTab('crear',el('tab-crear'));
+  }
 };
 window.openM=id=>el(id).classList.add('open');
 window.closeM=id=>el(id).classList.remove('open');
@@ -1602,6 +1610,42 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .toggle-slider::after{content:'';position:absolute;left:3px;top:3px;width:18px;height:18px;background:var(--mu);border-radius:50%;transition:.2s}
 .toggle input:checked+.toggle-slider{background:rgba(124,58,237,.2);border:1px solid #7c3aed}
 .toggle input:checked+.toggle-slider::after{transform:translateX(20px);background:#7c3aed}
+
+.quick-menu{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:10px;
+  margin:12px 0 16px;
+}
+.quick-btn{
+  background:linear-gradient(180deg, rgba(24,35,68,.95), rgba(12,22,45,.95));
+  border:1px solid rgba(110,140,255,.18);
+  border-radius:14px;
+  color:#fff;
+  padding:12px 8px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:4px;
+  min-height:68px;
+  box-shadow:0 6px 18px rgba(0,0,0,.18);
+  cursor:pointer;
+}
+.quick-btn span{
+  font-size:22px;
+  line-height:1;
+}
+.quick-btn small{
+  font-size:11px;
+  font-weight:700;
+  color:#cfd8ff;
+  line-height:1.1;
+}
+.quick-btn:active{
+  transform:scale(.98);
+}
+
 </style>
 </head>
 <body>

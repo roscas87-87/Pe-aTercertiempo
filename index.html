@@ -751,9 +751,8 @@ function renderHistorial(){
 
 window.sendRankingWA=()=>{
   const players=pArr();
-
   if(!players.length){
-    toast('⚠️ No hay jugadores');
+    toast('⚠️ No hay jugadores para compartir');
     return;
   }
 
@@ -769,6 +768,7 @@ window.sendRankingWA=()=>{
     }))
     .sort((a,b)=> b.points-a.points || (b.wins||0)-(a.wins||0) || (b.goals||0)-(a.goals||0));
 
+  const pena=S.config.peña||'Peña 3 Tiempo';
   const top=ranked.slice(0,10);
 
   const lines=top.map((p,i)=>
@@ -776,7 +776,7 @@ window.sendRankingWA=()=>{
   ).join('\n');
 
   const msg =
-    `🏆 Clasificación\n\n` +
+    `🏆 *Clasificación ${pena}*\n\n` +
     lines;
 
   window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
@@ -1723,9 +1723,9 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chip" onclick="switchRank('streak',this)">🔥 Racha</div>
   </div>
   <button class="btn btn-secondary btn-full" style="margin:10px 0 14px" onclick="sendRankingWA()">
-  📲 Enviar clasificación por WhatsApp
-</button>
-<div id="ranking-list"></div>
+    📲 Enviar clasificación por WhatsApp
+  </button>
+  <div id="ranking-list"></div>
 </div>
 
 <!-- CALENDARIO -->

@@ -7,6 +7,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Peña 3 Tiempo">
+
+<link rel="icon" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+<meta name="theme-color" content="#0b1220">
+
 <title>Peña 3 Tiempo</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script type="module">
@@ -224,6 +229,15 @@ function calcPts(key){
   }
   return pts+(S.players[key]?.bonusPoints||0);
 }
+
+window.changeBonus=(key,delta,ev)=>adminOnly(async()=>{
+  ev?.stopPropagation?.();
+  const current=S.players[key]?.bonusPoints||0;
+  const next=current+delta;
+  await update(ref(db,`players/${key}`),{bonusPoints:next});
+  const sign=delta>0?'+':'';
+  toast(`🎯 Puntos extra ${sign}${delta} · Total ${next>0?'+':''}${next}`);
+});
 function calcStreak(key){
   const ms=getMs(key).reverse();let s=0;
   for(const m of ms){const inA=(m.teamA?.players||[]).includes(key);const won=(m.winner==='A'&&inA)||(m.winner==='B'&&!inA);if(won)s++;else break;}
@@ -303,13 +317,23 @@ function renderPlayers(){
     const badges=getBadges(p).slice(0,3);
     const streak=calcStreak(p._key);
     const cuota=S.config.cuota||20;
+    const deuda=p.pay!=='pagado'?cuota:0;
+    const bonus=p.bonusPoints||0;
     const canEdit = IS_ADMIN || (IS_PLAYER && PLAYER_KEY===p._key);
+    const bonusControls=IS_ADMIN?`<div style="display:flex;align-items:center;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
+      <button onclick="changeBonus('${p._key}',-3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.18);color:#ff8f8f;font-weight:900;font-size:12px;cursor:pointer">-3</button>
+      <button onclick="changeBonus('${p._key}',-1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.12);color:#ff6b6b;font-weight:900;font-size:12px;cursor:pointer">-1</button>
+      <div style="min-width:82px;text-align:center;padding:5px 8px;border-radius:10px;background:rgba(165,94,234,.14);border:1px solid rgba(165,94,234,.28);color:#d6b3ff;font-size:11px;font-weight:800">Extra ${bonus>0?'+':''}${bonus}</div>
+      <button onclick="changeBonus('${p._key}',1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.12);color:#00ff88;font-weight:900;font-size:12px;cursor:pointer">+1</button>
+      <button onclick="changeBonus('${p._key}',3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.2);color:#72ffb4;font-weight:900;font-size:12px;cursor:pointer">+3</button>
+    </div>`:(bonus?`<div style="margin-top:6px;font-size:11px;color:#d6b3ff;font-weight:700">Extra ${bonus>0?'+':''}${bonus}</div>`:'');
     return`<div class="player-item" onclick="${canEdit?`openSelfEdit('${p._key}')`:''}" style="${canEdit?'cursor:pointer':''}">
       ${ava(p)}
       <div class="pi">
         <div class="pn">#${p.num||'-'} ${p.name} ${streakBadge(streak)} ${formaHtml(p._key)} ${statusBadge(p)} ${IS_PLAYER&&PLAYER_KEY===p._key?'<span style="font-size:10px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);border-radius:10px;padding:2px 6px;font-weight:700">YO</span>':''}</div>
         <div class="ps">${p.pos||''} · ⚽${p.goals||0} 🏆${p.wins||0} 🎯${calcPts(p._key)}pts</div>
         ${badges.length?`<div style="margin-top:3px">${badges.map(b=>`<span title="${b.name}" style="font-size:13px">${b.icon}</span>`).join(' ')}</div>`:''}
+        ${bonusControls}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${payBadge(p.pay)}
@@ -748,40 +772,6 @@ function renderHistorial(){
       ${scorers?`<div style="margin-top:5px;font-size:11px;color:var(--mu)">${scorers}</div>`:''}
     </div>`;}).join('');
 }
-
-window.sendRankingWA=()=>{
-  const players=pArr();
-  if(!players.length){
-    toast('⚠️ No hay jugadores para compartir');
-    return;
-  }
-  const ranked=players
-    .map(p=>({
-      ...p,
-      points:calcPts(p._key),
-      draws:countDraws(p._key)
-    }))
-    .map(p=>({
-      ...p,
-      losses:Math.max(0,(p.played||0)-(p.wins||0)-p.draws)
-    }))
-    .sort((a,b)=> b.points-a.points || (b.wins||0)-(a.wins||0) || (b.goals||0)-(a.goals||0));
-
-  const pena=S.config.peña||'Peña 3 Tiempo';
-  const top=ranked.slice(0,10);
-
-  const lines=top.map((p,i)=>
-    `${i+1}. ${p.name} — ${p.points} pts | ${p.wins||0}V ${p.draws||0}E ${p.losses||0}D | ⚽${p.goals||0}`
-  ).join('\n');
-
-  const msg =
-    `🏆 *Clasificación ${pena}*\n\n` +
-    lines +
-    `\n\nActualizado desde la app 📲`;
-
-  window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-};
-
 window.sendWA=()=>{
   const m=S.activeMatch;if(!m){toast('⚠️ No hay partido activo');return;}
   const pA=(m.teamA?.players||[]).map(k=>S.players[k]).filter(Boolean);
@@ -1238,7 +1228,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(''+team+'','+posIndex+','+i+'')">'
+    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1255,7 +1245,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(''+team+'','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
+    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
   openM('modal-swap-player');
 };
 
@@ -1464,13 +1454,13 @@ function renderMuro() {
 
   // GLORIA
   document.getElementById('muro-gloria').innerHTML = [
-    (byWins[0] && (byWins[0].wins||0)>0) ? gloriaCard('👑','Rey de la Peña', byWins[0], byWins[0].wins||0, 'victorias', '#ffd700') : '',
-    (byGoals[0] && (byGoals[0].goals||0)>0) ? gloriaCard('⚽','Pichichi', byGoals[0], byGoals[0].goals||0, 'goles', '#00ff88') : '',
-    (byStreak[0] && (byStreak[0].streak||0)>0) ? gloriaCard('🔥','Racha Imparable', byStreak[0], byStreak[0].streak||0, 'seguidas', '#ff6b35') : '',
-    (byMvp[0] && (byMvp[0].mvp||0)>0) ? gloriaCard('⭐','El Más Votado', byMvp[0], byMvp[0].mvp||0, 'MVPs', '#ffd700') : '',
-    (byPlayed[0] && (byPlayed[0].played||0)>0) ? gloriaCard('📊','El Más Presente', byPlayed[0], byPlayed[0].played||0, 'partidos', '#7c3aed') : '',
-    gloriaCard('🌡️','Mejor Forma', byForma[0], byForma[0]?.forma.icon||'', byForma[0]?.forma.label||'', '#00d4ff'),
-  ].filter(Boolean).join('');
+    gloriaCard('👑','Rey de la Peña',         byWins[0],    byWins[0]?.wins||0,        'victorias', '#ffd700'),
+    gloriaCard('⚽','Pichichi',               byGoals[0],   byGoals[0]?.goals||0,       'goles',     '#00ff88'),
+    gloriaCard('🔥','Racha Imparable',         byStreak[0],  byStreak[0]?.streak||0,     'seguidas',  '#ff6b35'),
+    gloriaCard('⭐','El Más Votado',           byMvp[0],     byMvp[0]?.mvp||0,           'MVPs',      '#ffd700'),
+    gloriaCard('📊','El Más Presente',         byPlayed[0],  byPlayed[0]?.played||0,     'partidos',  '#7c3aed'),
+    gloriaCard('🌡️','Mejor Forma',            byForma[0],   byForma[0]?.forma.icon||'', byForma[0]?.forma.label||'', '#00d4ff'),
+  ].join('');
 
   // VERGÜENZA
   document.getElementById('muro-verguenza').innerHTML = [
@@ -1722,10 +1712,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chip" onclick="switchRank('mvp',this)">⭐ MVP</div>
     <div class="chip" onclick="switchRank('streak',this)">🔥 Racha</div>
   </div>
-  <button class="btn btn-secondary btn-full" style="margin:10px 0 14px" onclick="sendRankingWA()">
-  📲 Enviar clasificación por WhatsApp
-</button>
-<div id="ranking-list"></div>
+  <div id="ranking-list"></div>
 </div>
 
 <!-- CALENDARIO -->

@@ -131,10 +131,7 @@ window.showPage=(name,btn)=>{
   el('page-'+name).classList.add('active');
   btn?.classList.add('active');
   currentPage=name; go();
-  if(name==='partidos'){
-    if(S.activeMatch) switchTab('activo',el('tab-activo'));
-    else switchTab('crear',el('tab-crear'));
-  }
+  if(name==='partidos') switchTab('crear',el('tab-crear'));
 };
 window.openM=id=>el(id).classList.add('open');
 window.closeM=id=>el(id).classList.remove('open');
@@ -222,29 +219,11 @@ function calcPts(key){
   let pts=0;
   for(const m of getMs(key)){
     const inA=(m.teamA?.players||[]).includes(key);
-
-    // Si el partido ya trae puntos guardados, los usamos
-    if(m.pointsAwarded){
-      if(inA) pts += m.pointsAwarded.A || 0;
-      else pts += m.pointsAwarded.B || 0;
-      continue;
-    }
-
-    // Compatibilidad con partidos antiguos
-    if(m.winner==='draw') pts += 1;
-    else if((m.winner==='A'&&inA)||(m.winner==='B'&&!inA)) pts += 3;
+    if(m.winner==='draw')pts+=1;
+    else if((m.winner==='A'&&inA)||(m.winner==='B'&&!inA))pts+=3;
   }
   return pts+(S.players[key]?.bonusPoints||0);
 }
-
-window.changeBonus=(key,delta,ev)=>adminOnly(async()=>{
-  ev?.stopPropagation?.();
-  const current=S.players[key]?.bonusPoints||0;
-  const next=current+delta;
-  await update(ref(db,`players/${key}`),{bonusPoints:next});
-  const sign=delta>0?'+':'';
-  toast(`🎯 Puntos extra ${sign}${delta} · Total ${next>0?'+':''}${next}`);
-});
 function calcStreak(key){
   const ms=getMs(key).reverse();let s=0;
   for(const m of ms){const inA=(m.teamA?.players||[]).includes(key);const won=(m.winner==='A'&&inA)||(m.winner==='B'&&!inA);if(won)s++;else break;}
@@ -325,26 +304,19 @@ function renderPlayers(){
     const streak=calcStreak(p._key);
     const cuota=S.config.cuota||20;
     const deuda=p.pay!=='pagado'?cuota:0;
-    const bonus=p.bonusPoints||0;
     const canEdit = IS_ADMIN || (IS_PLAYER && PLAYER_KEY===p._key);
-    const bonusControls=IS_ADMIN?`<div style="display:flex;align-items:center;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
-      <button onclick="changeBonus('${p._key}',-3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.18);color:#ff8f8f;font-weight:900;font-size:12px;cursor:pointer">-3</button>
-      <button onclick="changeBonus('${p._key}',-1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(255,71,87,.12);color:#ff6b6b;font-weight:900;font-size:12px;cursor:pointer">-1</button>
-      <div style="min-width:82px;text-align:center;padding:5px 8px;border-radius:10px;background:rgba(165,94,234,.14);border:1px solid rgba(165,94,234,.28);color:#d6b3ff;font-size:11px;font-weight:800">Extra ${bonus>0?'+':''}${bonus}</div>
-      <button onclick="changeBonus('${p._key}',1,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.12);color:#00ff88;font-weight:900;font-size:12px;cursor:pointer">+1</button>
-      <button onclick="changeBonus('${p._key}',3,event)" style="height:28px;min-width:34px;border:none;border-radius:8px;background:rgba(0,255,136,.2);color:#72ffb4;font-weight:900;font-size:12px;cursor:pointer">+3</button>
-    </div>`:(bonus?`<div style="margin-top:6px;font-size:11px;color:#d6b3ff;font-weight:700">Extra ${bonus>0?'+':''}${bonus}</div>`:'');
     return`<div class="player-item" onclick="${canEdit?`openSelfEdit('${p._key}')`:''}" style="${canEdit?'cursor:pointer':''}">
       ${ava(p)}
       <div class="pi">
         <div class="pn">#${p.num||'-'} ${p.name} ${streakBadge(streak)} ${formaHtml(p._key)} ${statusBadge(p)} ${IS_PLAYER&&PLAYER_KEY===p._key?'<span style="font-size:10px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);border-radius:10px;padding:2px 6px;font-weight:700">YO</span>':''}</div>
         <div class="ps">${p.pos||''} · ⚽${p.goals||0} 🏆${p.wins||0} 🎯${calcPts(p._key)}pts</div>
         ${badges.length?`<div style="margin-top:3px">${badges.map(b=>`<span title="${b.name}" style="font-size:13px">${b.icon}</span>`).join(' ')}</div>`:''}
-        ${bonusControls}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${payBadge(p.pay)}
         ${deuda>0?`<div style="font-size:10px;color:#ff4757">Pend.</div>`:''}
+        ${(p.fineDebt||0)>0?`<span class="badge badge-warn">💸 ${p.fineDebt}€</span>`:''}
+        ${IS_ADMIN?`<button onclick="event.stopPropagation();addFine('${p._key}')" style="background:rgba(255,215,0,.12);border:1px solid rgba(255,215,0,.35);color:#ffd700;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:800">💸 Multa</button>`:''}
         ${p.bday?`<div style="font-size:10px;color:var(--mu)">🎂 ${fDateS(p.bday)}</div>`:''}
       </div>
     </div>`;}).join('');
@@ -362,6 +334,32 @@ window.waReminder=(key)=>{
   const msg=`Hola ${p.name} 👋 Te recordamos que tienes la cuota de la ${S.config.peña||'Peña'} pendiente: *${cuota}€*. ¡Gracias! ⚽`;
   window.open(`https://wa.me/34${p.phone.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`,'_blank');
 };
+
+window.addFine=(key)=>adminOnly(()=>{
+  const p=S.players[key]; if(!p)return;
+  confirm2(`¿Poner una multa de <b>3€</b> a <b>${p.name}</b>?`,async()=>{
+    const nextDebt=(p.fineDebt||0)+3;
+    const nextCount=(p.fineCount||0)+1;
+    await update(ref(db,`players/${key}`),{fineDebt:nextDebt,fineCount:nextCount});
+    toast(`💸 Multa añadida a ${p.name}: ${nextDebt}€ pendientes`);
+  },'Poner multa');
+});
+
+window.payFine=(key)=>adminOnly(async()=>{
+  const p=S.players[key]; if(!p||(p.fineDebt||0)<=0)return;
+  const amount=Math.min(3,p.fineDebt||0);
+  const nextDebt=Math.max(0,(p.fineDebt||0)-amount);
+  await update(ref(db,`players/${key}`),{fineDebt:nextDebt});
+  await push(ref(db,'caja'),{
+    concepto:`Multa pagada - ${p.name}`,
+    importe:amount,
+    tipo:'ingreso',
+    categoria:'Multas',
+    date:new Date().toISOString().split('T')[0],
+    playerKey:key
+  });
+  toast(`✅ Multa pagada: ${p.name} ${amount}€`);
+});
 
 // Open add/edit player modal
 window.openAddP=()=>{
@@ -469,11 +467,11 @@ window.savePlayer=async()=>{
     lesionado:el('pf-lesionado').checked,sancionado:el('pf-sancionado').checked};
   if(editingKey){
     const ex=S.players[editingKey]||{};
-    Object.assign(data,{wins:ex.wins||0,played:ex.played||0,mvp:ex.mvp||0,captained:ex.captained||0});
+    Object.assign(data,{wins:ex.wins||0,played:ex.played||0,mvp:ex.mvp||0,captained:ex.captained||0,fineDebt:ex.fineDebt||0,fineCount:ex.fineCount||0});
     data.photo=photoB64||ex.photo||null;
     await set(ref(db,'players/'+editingKey),data);toast('✅ Jugador actualizado');
   }else{
-    Object.assign(data,{wins:0,played:0,mvp:0,captained:0});
+    Object.assign(data,{wins:0,played:0,mvp:0,captained:0,fineDebt:0,fineCount:0});
     if(photoB64)data.photo=photoB64;
     if(!data.playerPin) data.playerPin=''; // will be set by admin later
     await push(ref(db,'players'),data);toast('✅ Jugador añadido');
@@ -721,57 +719,22 @@ window.finalizeMatch=async()=>{
   const upd={};
   const sA=m.scoreA||0,sB=m.scoreB||0;
   const winner=sA>sB?'A':sB>sA?'B':'draw';
-
-  // Confirmación para evitar empates accidentales
-  if(winner==='draw'){
-    const ok = window.confirm(`⚠️ El partido va a guardarse como EMPATE (${sA}-${sB}). ¿Continuar?`);
-    if(!ok) return;
-  }
-
   Object.entries(tempGoals).forEach(([k,g])=>{if(g>0)upd[`players/${k}/goals`]=(S.players[k]?.goals||0)+g;});
   Object.entries(tempYellow).forEach(([k,y])=>{if(y>0)upd[`players/${k}/yellowCards`]=(S.players[k]?.yellowCards||0)+y;});
   Object.entries(tempRed).forEach(([k,r])=>{if(r>0)upd[`players/${k}/redCards`]=(S.players[k]?.redCards||0)+r;});
-
   const wt=winner==='A'?m.teamA?.players:winner==='B'?m.teamB?.players:[];
   (wt||[]).forEach(k=>{upd[`players/${k}/wins`]=(S.players[k]?.wins||0)+1;});
-
   const mvpSel=el('result-mvp').value;
-  if(mvpSel) upd[`players/${mvpSel}/mvp`]=(S.players[mvpSel]?.mvp||0)+1;
-
-  const pointsAwarded = winner==='draw'
-    ? {A:1,B:1}
-    : winner==='A'
-      ? {A:3,B:0}
-      : {A:0,B:3};
-
-  const rec={
-    ...m,
-    winner,
-    mvp:mvpSel||null,
-    goalScorers:Object.fromEntries(Object.entries(tempGoals).filter(([,g])=>g>0)),
-    yellowCards:{...tempYellow},
-    redCards:{...tempRed},
-    pointsAwarded,
-    stats:{
-      scoreA:sA,
-      scoreB:sB,
-      totalGoals:Object.values(tempGoals).reduce((a,b)=>a+b,0),
-      finishedAt:new Date().toISOString()
-    }
-  };
-
+  if(mvpSel)upd[`players/${mvpSel}/mvp`]=(S.players[mvpSel]?.mvp||0)+1;
+  const rec={...m,winner,mvp:mvpSel||null,goalScorers:Object.fromEntries(Object.entries(tempGoals).filter(([,g])=>g>0)),yellowCards:{...tempYellow},redCards:{...tempRed}};
   if(!mvpSel){
     const allKeys=[...(m.teamA?.players||[]),...(m.teamB?.players||[])];
     upd['activeMatch']={...m,winner,mvpVoting:true,mvpCandidates:allKeys,matchRecord:rec};
-    await update(ref(db),upd);
-    toast('🗳️ ¡Votación MVP abierta!');
+    await update(ref(db),upd);toast('🗳️ ¡Votación MVP abierta!');
   }else{
     upd['activeMatch']=null;
-    await update(ref(db),upd);
-    await push(ref(db,'matches'),rec);
-    toast('🏆 ¡Partido guardado!');
+    await update(ref(db),upd);await push(ref(db,'matches'),rec);toast('🏆 ¡Partido guardado!');
   }
-
   tempGoals={};tempYellow={};tempRed={};closeM('modal-match-result');
   switchTab('historial',el('tab-historial'));
 };
@@ -898,6 +861,8 @@ function renderCaja(){
   const gastos=S.caja.filter(c=>c.tipo==='gasto').reduce((s,c)=>s+(c.importe||0),0);
   const ingresos=S.caja.filter(c=>c.tipo==='ingreso').reduce((s,c)=>s+(c.importe||0),0);
   const saldo=ingresos-gastos;
+  const movs=[...S.caja].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+  const multasPendientes=players.reduce((s,p)=>s+(p.fineDebt||0),0);
   const pagCnt=players.filter(p=>p.pay==='pagado').length;
   const pendCnt=players.filter(p=>p.pay!=='pagado').length;
   el('caja-stats').innerHTML=`
@@ -908,10 +873,10 @@ function renderCaja(){
   el('caja-bar').innerHTML='';
 
     // Pendientes simples
-  const pendList=players.filter(p=>p.pay!=='pagado');
+  const pendList=players.filter(p=>p.pay!=='pagado'||((p.fineDebt||0)>0));
   el('caja-deudas').innerHTML=pendList.length?`
     <div class="form-label" style="margin-bottom:8px">❌ Pendientes de Pago</div>
-    ${pendList.map(p=>`<div class="caja-row">${ava({...p,_key:p._key},30)}<div style="flex:1;font-size:13px;font-weight:600">${p.name}</div>${payBadge(p.pay)}${IS_ADMIN&&p.phone?`<button onclick="waReminder('${p._key}')" style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);color:#25d366;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700">📲</button>`:''}</div>`).join('')}`
+    ${pendList.map(p=>`<div class="caja-row">${ava({...p,_key:p._key},30)}<div style="flex:1;font-size:13px;font-weight:600">${p.name}</div>${payBadge(p.pay)}${(p.fineDebt||0)>0?`<span class="badge badge-warn">💸 ${p.fineDebt}€</span>`:''}${IS_ADMIN&&(p.fineDebt||0)>0?`<button onclick="payFine('${p._key}')" style="background:rgba(0,255,136,.12);border:1px solid rgba(0,255,136,.35);color:#00ff88;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:800">Pagar 3€</button>`:''}${IS_ADMIN&&p.phone?`<button onclick="waReminder('${p._key}')" style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);color:#25d366;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700">📲</button>`:''}</div>`).join('')}`
     :'<div class="alert alert-ok">✅ ¡Todos al día!</div>';
   el('caja-movs').innerHTML=movs.length?movs.map(c=>`<div class="caja-row"><div style="font-size:20px">${c.tipo==='gasto'?'💸':'💰'}</div><div style="flex:1"><div style="font-size:13px;font-weight:600">${c.concepto}</div><div style="font-size:11px;color:var(--mu)">${fDateS(c.date)} · ${c.categoria||'General'}</div></div><div style="font-weight:700;color:${c.tipo==='gasto'?'#ff4757':'#00ff88'}">${c.tipo==='gasto'?'-':'+'}${c.importe||0}€</div>${IS_ADMIN?`<button onclick="delCaja('${c._key}')" style="background:none;border:none;color:#ff4757;font-size:16px;cursor:pointer">🗑️</button>`:''}</div>`).join(''):'<div class="empty-state"><div class="icon">💰</div><p>Sin movimientos</p></div>';
 }
@@ -1013,6 +978,33 @@ window.closeSeason=()=>adminOnly(async()=>{
   players.forEach(p=>{upd[`players/${p._key}/goals`]=0;upd[`players/${p._key}/wins`]=0;upd[`players/${p._key}/played`]=0;upd[`players/${p._key}/mvp`]=0;upd[`players/${p._key}/captained`]=0;upd[`players/${p._key}/assists`]=0;upd[`players/${p._key}/bonusPoints`]=0;upd[`players/${p._key}/yellowCards`]=0;upd[`players/${p._key}/redCards`]=0;});
   await update(ref(db),upd);
   closeM('modal-close-season');toast('🏆 Temporada archivada y stats reseteadas');
+});
+
+window.resetStatsOnly=()=>adminOnly(()=>{
+  confirm2('¿Resetear <b>estadísticas y partidos</b> sin guardar una temporada?',async()=>{
+    const players=pArr();
+    const upd={matches:null,activeMatch:null,votes:null};
+    players.forEach(p=>{
+      upd[`players/${p._key}/goals`]=0;
+      upd[`players/${p._key}/wins`]=0;
+      upd[`players/${p._key}/played`]=0;
+      upd[`players/${p._key}/mvp`]=0;
+      upd[`players/${p._key}/captained`]=0;
+      upd[`players/${p._key}/assists`]=0;
+      upd[`players/${p._key}/bonusPoints`]=0;
+      upd[`players/${p._key}/yellowCards`]=0;
+      upd[`players/${p._key}/redCards`]=0;
+    });
+    await update(ref(db),upd);
+    toast('🔄 Estadísticas reseteadas sin cerrar temporada');
+  },'Resetear');
+});
+
+window.deleteSeasonsHistory=()=>adminOnly(()=>{
+  confirm2('¿Borrar <b>todo el historial de temporadas</b>? Esta acción no toca jugadores ni partidos actuales.',async()=>{
+    await remove(ref(db,'seasons'));
+    toast('🗑️ Historial de temporadas borrado');
+  },'Borrar');
 });
 
 
@@ -1270,7 +1262,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
+    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(\''+team+'\','+posIndex+','+i+')">'
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1287,7 +1279,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
+    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(\''+team+'\','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
   openM('modal-swap-player');
 };
 
@@ -1798,7 +1790,9 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <div class="section-title"><div class="dot"></div>Temporadas</div>
   <div class="admin-only" style="display:none;margin-bottom:14px">
     <div class="alert alert-warn">⚠️ Cerrar temporada archiva el historial y <b>resetea todas las estadísticas</b>.</div>
-    <button class="btn btn-gold btn-full" onclick="openM('modal-close-season')">🏆 Cerrar Temporada Actual</button>
+    <button class="btn btn-gold btn-full" onclick="openM('modal-close-season')" style="margin-bottom:8px">🏆 Cerrar Temporada Actual</button>
+    <button class="btn btn-secondary btn-full" onclick="resetStatsOnly()" style="margin-bottom:8px">🔄 Resetear estadísticas sin cerrar temporada</button>
+    <button class="btn btn-danger btn-full" onclick="deleteSeasonsHistory()">🗑️ Borrar historial de temporadas</button>
   </div>
   <div id="temporadas-list"></div>
 </div>

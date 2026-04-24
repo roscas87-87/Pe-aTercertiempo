@@ -30,8 +30,9 @@ const db = getDatabase(app);
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
           events:[], caja:[], news:[], votes:{}, chat:[], seasons:[] };
 let IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
-let IS_PLAYER = false;    // jugador logueado
-let PLAYER_KEY = null;    // key del jugador logueado
+let IS_TESORERO = localStorage.getItem('pfm_tesorero') === '1';
+let IS_PLAYER = localStorage.getItem('pfm_player') === '1';    // jugador logueado
+let PLAYER_KEY = localStorage.getItem('pfm_player_key') || null;    // key del jugador logueado
 let currentPage = 'home';
 let playerFilter = 'todos';
 let rankMode = 'points';
@@ -42,8 +43,8 @@ let confirmCb=null, editingKey=null, photoB64=null;
 // ── FIREBASE ───────────────────────────────────────────
 function startListeners(){
   try {
-    onValue(ref(db,'config'),      s=>{ try{ S.config=s.val()||{peña:'Peña 3 Tiempo',cuota:20,diaPago:1}; syncConfig(); go(); }catch(e){showErr(e,'config');} });
-    onValue(ref(db,'players'),     s=>{ try{ S.players=s.val()||{}; go(); }catch(e){showErr(e,'players');} });
+    onValue(ref(db,'config'),      s=>{ try{ S.config=s.val()||{peña:'Peña 3 Tiempo',cuota:20,diaPago:1}; syncConfig(); syncTesoreroUi(); go(); }catch(e){showErr(e,'config');} });
+    onValue(ref(db,'players'),     s=>{ try{ S.players=s.val()||{}; syncPlayerUi(); go(); }catch(e){showErr(e,'players');} });
     onValue(ref(db,'matches'),     s=>{ try{ S.matches=s.val()||{}; go(); }catch(e){showErr(e,'matches');} });
     onValue(ref(db,'activeMatch'), s=>{ try{ S.activeMatch=s.val()||null; go(); updateMvpBtn(); }catch(e){showErr(e,'activeMatch');} });
     onValue(ref(db,'events'),      s=>{ try{ S.events=arr(s.val()); go(); }catch(e){showErr(e,'events');} });
@@ -65,6 +66,7 @@ function syncConfig(){
   el('cfg-cuota').value=S.config.cuota||20;
   el('cfg-freq').value=S.config.frecuencia||1;
   el('cfg-dia-pago').value=S.config.diaPago||1;
+  if(el('cfg-tesorero-pin')) el('cfg-tesorero-pin').value='';
 }
 function updateMvpBtn(){
   const b=el('btn-close-voting');
@@ -145,7 +147,38 @@ function syncAdminUi(){
     loginBtn.style.display=IS_ADMIN?'none':'flex';
   }
   document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
+  syncTesoreroUi?.();
+  syncPlayerUi?.();
   updateMvpBtn?.();
+}
+
+
+function canMoney(){ return IS_ADMIN || IS_TESORERO; }
+function moneyOnly(fn){if(!canMoney()){toast('🔒 Solo administrador o tesorero');return;}fn();}
+
+function syncPlayerUi(){
+  const badge=el('player-session-badge');
+  const btn=el('btn-player-login');
+  if(!badge||!btn)return;
+  if(IS_PLAYER && PLAYER_KEY && S.players && S.players[PLAYER_KEY]){
+    const p=S.players[PLAYER_KEY];
+    badge.style.display='flex';
+    badge.innerHTML=`👤 ${p.name} ✕`;
+    btn.style.display='none';
+  }else{
+    IS_PLAYER=false; PLAYER_KEY=null;
+    localStorage.removeItem('pfm_player');
+    localStorage.removeItem('pfm_player_key');
+    badge.style.display='none';
+    btn.style.display='flex';
+  }
+}
+function syncTesoreroUi(){
+  const badge=el('tesorero-badge');
+  const btn=el('btn-tesorero-login');
+  if(!badge||!btn)return;
+  badge.style.display=IS_TESORERO?'flex':'none';
+  btn.style.display=IS_TESORERO?'none':'flex';
 }
 
 // ── AUTH ───────────────────────────────────────────────
@@ -164,6 +197,28 @@ window.doLogout=()=>{
   toast('🔒 Sesión cerrada');go();
 };
 
+
+window.openTesoreroLogin=()=>openM('modal-tesorero-login');
+window.doTesoreroLogin=()=>{
+  const pin=el('tesorero-pin').value;
+  const saved=S.config.tesoreroPin||'2222';
+  if(pin===saved){
+    IS_TESORERO=true;
+    localStorage.setItem('pfm_tesorero','1');
+    closeM('modal-tesorero-login');
+    syncTesoreroUi();
+    toast('💰 Tesorero activado');
+    go();
+  }else toast('❌ PIN tesorero incorrecto');
+};
+window.doTesoreroLogout=()=>{
+  IS_TESORERO=false;
+  localStorage.removeItem('pfm_tesorero');
+  syncTesoreroUi();
+  toast('💰 Sesión tesorero cerrada');
+  go();
+};
+
 // ── LOGIN DE JUGADOR ─────────────────────────────────
 window.openPlayerLogin=()=>openM('modal-player-login');
 
@@ -177,6 +232,8 @@ window.doPlayerLogin=async()=>{
   if(!found){toast('❌ Nombre o PIN incorrecto');return;}
   IS_PLAYER=true;
   PLAYER_KEY=found[0];
+  localStorage.setItem('pfm_player','1');
+  localStorage.setItem('pfm_player_key',PLAYER_KEY);
   closeM('modal-player-login');
   el('player-session-badge').style.display='flex';
   el('player-session-badge').innerHTML=`👤 ${found[1].name} ✕`;
@@ -187,6 +244,8 @@ window.doPlayerLogin=async()=>{
 
 window.doPlayerLogout=()=>{
   IS_PLAYER=false; PLAYER_KEY=null;
+  localStorage.removeItem('pfm_player');
+  localStorage.removeItem('pfm_player_key');
   el('player-session-badge').style.display='none';
   el('btn-player-login').style.display='flex';
   toast('👋 Sesión cerrada');go();
@@ -205,7 +264,8 @@ window.saveConfig=()=>adminOnly(async()=>{
     cuota:parseFloat(el('cfg-cuota').value)||20,
     frecuencia:parseInt(el('cfg-freq').value)||1,
     diaPago:parseInt(el('cfg-dia-pago').value)||1,
-    adminPin:np||(await get(ref(db,'config/adminPin'))).val()||'1234'
+    adminPin:np||(await get(ref(db,'config/adminPin'))).val()||'1234',
+    tesoreroPin:el('cfg-tesorero-pin')?.value||(await get(ref(db,'config/tesoreroPin'))).val()||'2222'
   });toast('✅ Configuración guardada');
 });
 
@@ -356,7 +416,7 @@ window.addFine=(key)=>adminOnly(()=>{
   },'Poner multa');
 });
 
-window.payFine=(key)=>adminOnly(async()=>{
+window.payFine=(key)=>moneyOnly(async()=>{
   const p=S.players[key]; if(!p||(p.fineDebt||0)<=0)return;
   const amount=Math.min(3,p.fineDebt||0);
   const nextDebt=Math.max(0,(p.fineDebt||0)-amount);
@@ -1524,6 +1584,8 @@ function renderMuro() {
 el('header-date').textContent=new Date().toLocaleDateString('es-ES',{day:'numeric',month:'short'});
 el('match-date').valueAsDate=new Date();
 syncAdminUi();
+syncTesoreroUi();
+syncPlayerUi();
 startListeners();
 toast('☁️ Conectado en tiempo real',1500);
 </script>

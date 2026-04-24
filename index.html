@@ -7,11 +7,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Peña 3 Tiempo">
-
-<link rel="icon" href="logo.png">
-<link rel="apple-touch-icon" href="logo.png">
-<meta name="theme-color" content="#0b1220">
-
 <title>Peña 3 Tiempo</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script type="module">
@@ -136,7 +131,10 @@ window.showPage=(name,btn)=>{
   el('page-'+name).classList.add('active');
   btn?.classList.add('active');
   currentPage=name; go();
-  if(name==='partidos') switchTab('crear',el('tab-crear'));
+  if(name==='partidos'){
+    if(S.activeMatch) switchTab('activo',el('tab-activo'));
+    else switchTab('crear',el('tab-crear'));
+  }
 };
 window.openM=id=>el(id).classList.add('open');
 window.closeM=id=>el(id).classList.remove('open');
@@ -224,8 +222,17 @@ function calcPts(key){
   let pts=0;
   for(const m of getMs(key)){
     const inA=(m.teamA?.players||[]).includes(key);
-    if(m.winner==='draw')pts+=1;
-    else if((m.winner==='A'&&inA)||(m.winner==='B'&&!inA))pts+=3;
+
+    // Si el partido ya trae puntos guardados, los usamos
+    if(m.pointsAwarded){
+      if(inA) pts += m.pointsAwarded.A || 0;
+      else pts += m.pointsAwarded.B || 0;
+      continue;
+    }
+
+    // Compatibilidad con partidos antiguos
+    if(m.winner==='draw') pts += 1;
+    else if((m.winner==='A'&&inA)||(m.winner==='B'&&!inA)) pts += 3;
   }
   return pts+(S.players[key]?.bonusPoints||0);
 }
@@ -714,22 +721,57 @@ window.finalizeMatch=async()=>{
   const upd={};
   const sA=m.scoreA||0,sB=m.scoreB||0;
   const winner=sA>sB?'A':sB>sA?'B':'draw';
+
+  // Confirmación para evitar empates accidentales
+  if(winner==='draw'){
+    const ok = window.confirm(`⚠️ El partido va a guardarse como EMPATE (${sA}-${sB}). ¿Continuar?`);
+    if(!ok) return;
+  }
+
   Object.entries(tempGoals).forEach(([k,g])=>{if(g>0)upd[`players/${k}/goals`]=(S.players[k]?.goals||0)+g;});
   Object.entries(tempYellow).forEach(([k,y])=>{if(y>0)upd[`players/${k}/yellowCards`]=(S.players[k]?.yellowCards||0)+y;});
   Object.entries(tempRed).forEach(([k,r])=>{if(r>0)upd[`players/${k}/redCards`]=(S.players[k]?.redCards||0)+r;});
+
   const wt=winner==='A'?m.teamA?.players:winner==='B'?m.teamB?.players:[];
   (wt||[]).forEach(k=>{upd[`players/${k}/wins`]=(S.players[k]?.wins||0)+1;});
+
   const mvpSel=el('result-mvp').value;
-  if(mvpSel)upd[`players/${mvpSel}/mvp`]=(S.players[mvpSel]?.mvp||0)+1;
-  const rec={...m,winner,mvp:mvpSel||null,goalScorers:Object.fromEntries(Object.entries(tempGoals).filter(([,g])=>g>0)),yellowCards:{...tempYellow},redCards:{...tempRed}};
+  if(mvpSel) upd[`players/${mvpSel}/mvp`]=(S.players[mvpSel]?.mvp||0)+1;
+
+  const pointsAwarded = winner==='draw'
+    ? {A:1,B:1}
+    : winner==='A'
+      ? {A:3,B:0}
+      : {A:0,B:3};
+
+  const rec={
+    ...m,
+    winner,
+    mvp:mvpSel||null,
+    goalScorers:Object.fromEntries(Object.entries(tempGoals).filter(([,g])=>g>0)),
+    yellowCards:{...tempYellow},
+    redCards:{...tempRed},
+    pointsAwarded,
+    stats:{
+      scoreA:sA,
+      scoreB:sB,
+      totalGoals:Object.values(tempGoals).reduce((a,b)=>a+b,0),
+      finishedAt:new Date().toISOString()
+    }
+  };
+
   if(!mvpSel){
     const allKeys=[...(m.teamA?.players||[]),...(m.teamB?.players||[])];
     upd['activeMatch']={...m,winner,mvpVoting:true,mvpCandidates:allKeys,matchRecord:rec};
-    await update(ref(db),upd);toast('🗳️ ¡Votación MVP abierta!');
+    await update(ref(db),upd);
+    toast('🗳️ ¡Votación MVP abierta!');
   }else{
     upd['activeMatch']=null;
-    await update(ref(db),upd);await push(ref(db,'matches'),rec);toast('🏆 ¡Partido guardado!');
+    await update(ref(db),upd);
+    await push(ref(db,'matches'),rec);
+    toast('🏆 ¡Partido guardado!');
   }
+
   tempGoals={};tempYellow={};tempRed={};closeM('modal-match-result');
   switchTab('historial',el('tab-historial'));
 };
@@ -772,28 +814,6 @@ function renderHistorial(){
       ${scorers?`<div style="margin-top:5px;font-size:11px;color:var(--mu)">${scorers}</div>`:''}
     </div>`;}).join('');
 }
-window.sendRankingWA=function(){
-  try{
-    const players=pArr();
-    if(!players || players.length===0){
-      alert('No hay jugadores');
-      return;
-    }
-
-    let txt='🏆 Clasificación\\n\\n';
-
-    players.forEach(function(p,i){
-      const pts=calcPts(p._key)||0;
-      txt += (i+1)+'. '+p.name+' - '+pts+' pts\\n';
-    });
-
-    window.open('https://wa.me/?text='+encodeURIComponent(txt),'_blank');
-
-  }catch(e){
-    console.error(e);
-    alert('Error al generar clasificación');
-  }
-};
 window.sendWA=()=>{
   const m=S.activeMatch;if(!m){toast('⚠️ No hay partido activo');return;}
   const pA=(m.teamA?.players||[]).map(k=>S.players[k]).filter(Boolean);
@@ -1733,10 +1753,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chip" onclick="switchRank('assists',this)">🅰️ Asist.</div>
     <div class="chip" onclick="switchRank('mvp',this)">⭐ MVP</div>
     <div class="chip" onclick="switchRank('streak',this)">🔥 Racha</div>
-  </div>S
-<button onclick="sendRankingWA()" style="margin:10px 0;padding:10px;border-radius:10px;width:100%">
-📲 Enviar clasificación por WhatsApp
-</button>
+  </div>
   <div id="ranking-list"></div>
 </div>
 
@@ -2083,4 +2100,3 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 
 </body>
 </html>
-

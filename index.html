@@ -30,6 +30,7 @@ const db = getDatabase(app);
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
           events:[], caja:[], news:[], votes:{}, chat:[], seasons:[] };
 let IS_ADMIN = false;
+IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
 let IS_PLAYER = false;    // jugador logueado
 let PLAYER_KEY = null;    // key del jugador logueado
 let currentPage = 'home';
@@ -142,7 +143,8 @@ window.doLogin=()=>{
   const pin=el('admin-pin').value;
   get(ref(db,'config/adminPin')).then(s=>{
     if(pin===(s.val()||'1234')){
-      IS_ADMIN=true;closeM('modal-login');
+      IS_ADMIN=true;
+localStorage.setItem('pfm_admin','1');closeM('modal-login');
       el('admin-badge').style.display='flex';el('btn-login').style.display='none';
       toast('🔓 Administrador activado');go();updateMvpBtn();
     }else toast('❌ PIN incorrecto');

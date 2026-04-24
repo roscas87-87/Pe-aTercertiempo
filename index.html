@@ -29,8 +29,7 @@ const db = getDatabase(app);
 // ── STATE ──────────────────────────────────────────────
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
           events:[], caja:[], news:[], votes:{}, chat:[], seasons:[] };
-let IS_ADMIN = false;
-IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
+let IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
 let IS_PLAYER = false;    // jugador logueado
 let PLAYER_KEY = null;    // key del jugador logueado
 let currentPage = 'home';
@@ -51,8 +50,7 @@ function startListeners(){
     onValue(ref(db,'caja'),        s=>{ try{ S.caja=arr(s.val()); go(); }catch(e){showErr(e,'caja');} });
     onValue(ref(db,'news'),        s=>{ try{ S.news=arr(s.val()); go(); }catch(e){showErr(e,'news');} });
     onValue(ref(db,'votes'),       s=>{ try{ S.votes=s.val()||{}; go(); }catch(e){showErr(e,'votes');} });
-    onValue(ref(db,'chat'),        s=>{ try{ S.chat=arr(s.val()); renderChat(); }catch(e){showErr(e,'chat');} });
-    onValue(ref(db,'seasons'),     s=>{ try{ S.seasons=arr(s.val()); }catch(e){showErr(e,'seasons');} });
+    onValue(ref(db,'seasons'),     s=>{ try{ S.seasons=arr(s.val()); go(); }catch(e){showErr(e,'seasons');} });
   } catch(e) { showErr(e,'startListeners'); }
 }
 
@@ -76,7 +74,7 @@ function go(){
   try {
     const fns={home:renderHome,jugadores:renderPlayers,partidos:renderPartidoPage,muro:renderMuro,
       ranking:()=>renderRanking(rankMode),calendario:renderCalendario,
-      caja:renderCaja,noticias:renderNoticias,chat:renderChat,temporadas:renderTemporadas};
+      caja:renderCaja,noticias:renderNoticias,temporadas:renderTemporadas};
     fns[currentPage]?.();
   } catch(e) { showErr(e, 'render:'+currentPage); }
 }
@@ -138,20 +136,31 @@ window.openM=id=>el(id).classList.add('open');
 window.closeM=id=>el(id).classList.remove('open');
 window.closeBg=(e,id)=>{if(e.target===el(id))closeM(id);};
 
+
+function syncAdminUi(){
+  const adminBadge=el('admin-badge');
+  const loginBtn=el('btn-login');
+  if(adminBadge && loginBtn){
+    adminBadge.style.display=IS_ADMIN?'flex':'none';
+    loginBtn.style.display=IS_ADMIN?'none':'flex';
+  }
+  document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
+  updateMvpBtn?.();
+}
+
 // ── AUTH ───────────────────────────────────────────────
 window.doLogin=()=>{
   const pin=el('admin-pin').value;
   get(ref(db,'config/adminPin')).then(s=>{
     if(pin===(s.val()||'1234')){
-      IS_ADMIN=true;
-localStorage.setItem('pfm_admin','1');closeM('modal-login');
+      IS_ADMIN=true;localStorage.setItem('pfm_admin','1');closeM('modal-login');
       el('admin-badge').style.display='flex';el('btn-login').style.display='none';
       toast('🔓 Administrador activado');go();updateMvpBtn();
     }else toast('❌ PIN incorrecto');
   });
 };
 window.doLogout=()=>{
-  IS_ADMIN=false;el('admin-badge').style.display='none';el('btn-login').style.display='flex';
+  IS_ADMIN=false;localStorage.removeItem('pfm_admin');el('admin-badge').style.display='none';el('btn-login').style.display='flex';
   toast('🔒 Sesión cerrada');go();
 };
 
@@ -1004,7 +1013,9 @@ window.resetStatsOnly=()=>adminOnly(()=>{
 
 window.deleteSeasonsHistory=()=>adminOnly(()=>{
   confirm2('¿Borrar <b>todo el historial de temporadas</b>? Esta acción no toca jugadores ni partidos actuales.',async()=>{
-    await remove(ref(db,'seasons'));
+    await set(ref(db,'seasons'), null);
+    S.seasons=[];
+    renderTemporadas();
     toast('🗑️ Historial de temporadas borrado');
   },'Borrar');
 });
@@ -1512,6 +1523,7 @@ function renderMuro() {
 // ── INIT ───────────────────────────────────────────────
 el('header-date').textContent=new Date().toLocaleDateString('es-ES',{day:'numeric',month:'short'});
 el('match-date').valueAsDate=new Date();
+syncAdminUi();
 startListeners();
 toast('☁️ Conectado en tiempo real',1500);
 </script>
@@ -1776,22 +1788,10 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <button class="fab admin-only" onclick="openM('modal-add-news')" style="display:none">+</button>
 </div>
 
-<!-- CHAT -->
-<div class="page" id="page-chat">
-  <div class="section-title"><div class="dot"></div>Chat de la Peña</div>
-  <div class="form-group"><label class="form-label">Tu nombre en el chat</label><input type="text" class="form-input" id="chat-name" placeholder="Tu nombre..." style="margin-bottom:0"></div>
-  <div class="chat-container" id="chat-messages"></div>
-  <div style="display:flex;gap:8px;position:sticky;bottom:86px;background:var(--bg);padding:8px 0">
-    <input type="text" class="form-input" id="chat-input" placeholder="Escribe un mensaje..." onkeydown="handleChatKey(event)" style="flex:1">
-    <button class="btn btn-primary" style="width:auto;padding:11px 16px" onclick="sendChat()">➤</button>
-  </div>
-</div>
-
 <!-- TEMPORADAS -->
 <div class="page" id="page-temporadas">
   <div class="section-title"><div class="dot"></div>Temporadas</div>
   <div class="admin-only" style="display:none;margin-bottom:14px">
-    <div class="alert alert-warn">⚠️ Cerrar temporada archiva el historial y <b>resetea todas las estadísticas</b>.</div>
     <button class="btn btn-gold btn-full" onclick="openM('modal-close-season')" style="margin-bottom:8px">🏆 Cerrar Temporada Actual</button>
     <button class="btn btn-secondary btn-full" onclick="resetStatsOnly()" style="margin-bottom:8px">🔄 Resetear estadísticas sin cerrar temporada</button>
     <button class="btn btn-danger btn-full" onclick="deleteSeasonsHistory()">🗑️ Borrar historial de temporadas</button>
@@ -1851,7 +1851,6 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('calendario',null)"><span style="font-size:24px">📅</span><span>Calendario</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('caja',null)"><span style="font-size:24px">💰</span><span>Caja</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('noticias',null)"><span style="font-size:24px">📢</span><span>Noticias</span></button>
-      <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('chat',null)"><span style="font-size:24px">💬</span><span>Chat</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('temporadas',null)"><span style="font-size:24px">🔄</span><span>Temporadas</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('ajustes',null)"><span style="font-size:24px">⚙️</span><span>Ajustes</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px;grid-column:1/-1" onclick="closeM('modal-more');showPage('muro',null)"><span style="font-size:24px">🏆😤</span><span>Gloria & Vergüenza</span></button>

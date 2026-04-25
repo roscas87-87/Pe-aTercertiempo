@@ -28,7 +28,8 @@ const db = getDatabase(app);
 
 // ── STATE ──────────────────────────────────────────────
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
-          events:[], caja:[], news:[], votes:{}, chat:[], seasons:[] };
+          events:[], caja:[], news:[], votes:{}, chat:[], seasons:[],
+          convocatorias:{} };
 let IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
 let IS_TESORERO = localStorage.getItem('pfm_tesorero') === '1';
 let IS_PLAYER = localStorage.getItem('pfm_player') === '1';    // jugador logueado
@@ -74,7 +75,7 @@ function updateMvpBtn(){
 }
 function go(){
   try {
-    const fns={home:renderHome,jugadores:renderPlayers,partidos:renderPartidoPage,muro:renderMuro,
+    const fns={home:renderHome,jugadores:renderPlayers,partidos:renderPartidoPage,muro:renderMuro,convocatoria:renderConvocatoria,
       ranking:()=>renderRanking(rankMode),calendario:renderCalendario,
       caja:renderCaja,noticias:renderNoticias,temporadas:renderTemporadas};
     fns[currentPage]?.();
@@ -182,29 +183,6 @@ function syncTesoreroUi(){
 }
 
 // ── AUTH ───────────────────────────────────────────────
-window.selectRole = (role) => {
-  document.getElementById('selected-role').value = role;
-  const roles = ['admin','tesorero','jugador'];
-  const colors = {
-    admin:    {border:'rgba(255,214,0,.8)', bg:'rgba(255,214,0,.15)', color:'#ffd700'},
-    tesorero: {border:'rgba(0,212,255,.8)', bg:'rgba(0,212,255,.1)',  color:'#00d4ff'},
-    jugador:  {border:'rgba(124,58,237,.8)',bg:'rgba(124,58,237,.1)', color:'#a78bfa'},
-  };
-  roles.forEach(r => {
-    const btn = document.getElementById('role-btn-'+r);
-    if(!btn) return;
-    if(r === role) {
-      btn.style.borderColor = colors[r].border;
-      btn.style.background  = colors[r].bg;
-      btn.style.color       = colors[r].color;
-    } else {
-      btn.style.borderColor = 'var(--b)';
-      btn.style.background  = 'var(--s2)';
-      btn.style.color       = 'var(--mu)';
-    }
-  });
-};
-
 window.doLogin=()=>{
   const pin=el('admin-pin').value;
   get(ref(db,'config/adminPin')).then(s=>{
@@ -214,15 +192,6 @@ window.doLogin=()=>{
       toast('🔓 Administrador activado');go();updateMvpBtn();
     }else toast('❌ PIN incorrecto');
   });
-};
-window.doTesLogout=()=>{
-  IS_TESORERO=false;
-  localStorage.removeItem('pfm_tesorero');
-  const tb=el('tesorero-badge');
-  if(tb) tb.style.display='none';
-  el('btn-login').style.display='flex';
-  toast('💰 Sesión de tesorero cerrada');
-  go();
 };
 window.doLogout=()=>{
   IS_ADMIN=false;localStorage.removeItem('pfm_admin');el('admin-badge').style.display='none';el('btn-login').style.display='flex';
@@ -375,6 +344,21 @@ function renderHome(){
   el('home-active').innerHTML=S.activeMatch?`<div class="alert alert-warn" style="cursor:pointer" onclick="showPage('partidos',document.querySelector('.nav-btn:nth-child(3)'));switchTab('activo',el('tab-activo'))">⚽ <b>Partido en curso:</b> ${S.activeMatch.teamA?.name||'Morado'} <b>${S.activeMatch.scoreA||0}-${S.activeMatch.scoreB||0}</b> ${S.activeMatch.teamB?.name||'Amarillo'} · <span style="color:var(--ac)">Ver →</span></div>`:'';
 
   // MVP vote
+  // Convocatoria alert on home
+  const openConvs = Object.entries(S.convocatorias||{})
+    .map(([k,v])=>({...v,_key:k}))
+    .filter(c=>!c.closed && new Date(c.date+'T'+(c.time||'19:00'))>new Date());
+  const pendingConv = IS_PLAYER && PLAYER_KEY
+    ? openConvs.filter(c=>!(c.responses||{})[PLAYER_KEY])
+    : [];
+  const convEl = el('home-conv-alert');
+  if(convEl) {
+    convEl.innerHTML = pendingConv.length
+      ? '<div class="alert alert-warn" style="cursor:pointer" onclick="closeM('modal-more');showPage('convocatoria',null)">'
+        + '📋 <b>¡Hay '+pendingConv.length+' convocatoria'+( pendingConv.length>1?'s':'')+' pendiente'+( pendingConv.length>1?'s':'')+' de confirmación!</b> '
+        + '<span style="color:var(--ac)">Confirmar →</span></div>'
+      : '';
+  }
   el('home-mvp').innerHTML=S.activeMatch?.mvpVoting?`<div class="alert alert-info" style="cursor:pointer" onclick="openMvpVote()">🗳️ <b>¡Vota al MVP!</b> El partido ha terminado. <span style="color:var(--ac)">Votar →</span></div>`:'';
 
   // Noticias recientes
@@ -1393,8 +1377,7 @@ window.doSwap = async(team,iA,iB)=>{
   const kA=[...(m.teamA?.players||[])], kB=[...(m.teamB?.players||[])];
   if(team==='A'){ [kA[iA],kB[iB]]=[kB[iB],kA[iA]]; }
   else           { [kB[iA],kA[iB]]=[kA[iB],kB[iA]]; }
-  await set(ref(db,'activeMatch/teamA/players'), kA);
-  await set(ref(db,'activeMatch/teamB/players'), kB);
+  await update(ref(db,'activeMatch'),{'teamA.players':kA,'teamB.players':kB});
   closeM('modal-swap-player'); toast('🔄 Jugadores intercambiados');
 };
 
@@ -1403,8 +1386,7 @@ window.moveToOther = async(team,idx)=>{
   const kA=[...(m.teamA?.players||[])], kB=[...(m.teamB?.players||[])];
   if(team==='A'){ kB.push(...kA.splice(idx,1)); }
   else           { kA.push(...kB.splice(idx,1)); }
-  await set(ref(db,'activeMatch/teamA/players'), kA);
-  await set(ref(db,'activeMatch/teamB/players'), kB);
+  await update(ref(db,'activeMatch'),{'teamA.players':kA,'teamB.players':kB});
   closeM('modal-swap-player'); toast('➡️ Jugador movido');
 };
 
@@ -1614,6 +1596,181 @@ function renderMuro() {
   ].filter(Boolean).join('');
 }
 
+
+// ── CONVOCATORIA ─────────────────────────────────────────────
+function renderConvocatoria() {
+  document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
+  const cont = el('conv-list');
+  if(!cont) return;
+  const convs = Object.entries(S.convocatorias)
+    .map(([k,v])=>({...v,_key:k}))
+    .sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  if(!convs.length){
+    cont.innerHTML='<div class="empty-state"><div class="icon">📋</div><p>Sin convocatorias.<br>'
+      +(IS_ADMIN?'Pulsa + para crear una.':'El admin creará la convocatoria.')+'</p></div>';
+    return;
+  }
+
+  cont.innerHTML = convs.map(c => {
+    const responses = c.responses||{};
+    const players = pArr();
+    const vanList  = Object.entries(responses).filter(([,v])=>v==='si');
+    const noList   = Object.entries(responses).filter(([,v])=>v==='no');
+    const vanCount = vanList.length;
+    const noCount  = noList.length;
+    const pendCount= players.filter(p=>!responses[p._key]).length;
+    const minOk    = vanCount >= (c.min||14);
+    const myKey    = PLAYER_KEY;
+    const myResp   = myKey ? responses[myKey] : null;
+    const isClosed = c.closed;
+    const now      = new Date();
+    const convDate = new Date(c.date+'T'+(c.time||'19:00'));
+    const isPast   = convDate < now;
+
+    // Players who said yes
+    const vanNames = vanList.map(([k])=>{
+      const p=S.players[k]; return p?ava({...p,_key:k},26):'';
+    }).join('');
+
+    return '<div class="card" style="' + (isClosed?'opacity:.7':'') + '">'
+      // Header
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">'
+      + '<div>'
+      + '<div style="font-family:var(--fd);font-size:20px">' + (c.title||'Partido') + '</div>'
+      + '<div style="font-size:12px;color:var(--mu);margin-top:2px">📅 ' + fDate(c.date)
+        + (c.time?' · ⏰ '+c.time:'') + (c.lugar?' · 📍 '+c.lugar:'') + '</div>'
+      + '<div style="font-size:11px;color:var(--mu);margin-top:2px">👥 Min: <b style="color:#ffd700">'+(c.min||12)+'</b> · Max: <b style="color:#ff6b35">'+(c.max||16)+'</b></div>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px;align-items:center">'
+      + (isClosed?'<span class="badge badge-warn">🔒 Cerrada</span>'
+        :isPast?'<span class="badge badge-warn">⏰ Pasada</span>'
+        :'<span class="badge badge-ok">🔴 Abierta</span>')
+      + (IS_ADMIN?'<button onclick="deleteConv(''+c._key+'')" style="background:none;border:none;color:#ff4757;font-size:18px;cursor:pointer">🗑️</button>':'')
+      + '</div></div>'
+
+      // Progress
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">'
+      + '<div class="stat-card" style="border-color:rgba(0,255,136,.3)">'
+      + '<div style="font-family:var(--fd);font-size:24px;color:#00ff88">' + vanCount + '</div>'
+      + '<div style="font-size:10px;color:var(--mu)">✅ Van</div></div>'
+      + '<div class="stat-card" style="border-color:rgba(255,71,87,.3)">'
+      + '<div style="font-family:var(--fd);font-size:24px;color:#ff4757">' + noCount + '</div>'
+      + '<div style="font-size:10px;color:var(--mu)">❌ No pueden</div></div>'
+      + '<div class="stat-card">'
+      + '<div style="font-family:var(--fd);font-size:24px;color:var(--mu)">' + pendCount + '</div>'
+      + '<div style="font-size:10px;color:var(--mu)">⏳ Sin contestar</div></div>'
+      + '</div>'
+
+      // Min players bar
+      + '<div style="margin-bottom:10px">'
+      + '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mu);margin-bottom:4px">'
+      + '<span>Jugadores confirmados</span>'
+      + '<span style="color:' + (minOk?'#00ff88':'#ffd700') + ';font-weight:700">'
+      + vanCount + ' / ' + (c.min||14) + ' min</span></div>'
+      + '<div class="progress-bar"><div class="progress-fill" style="width:'
+      + Math.min(100,Math.round(vanCount/(c.min||14)*100)) + '%"></div></div>'
+      + '<div style="font-size:10px;margin-top:3px;color:'
+        + (vanCount>=(c.max||16)?'#ff4757':minOk?'#00ff88':'#ffd700') + '">'
+      + (vanCount>=(c.max||16)?'🔴 ¡Completo! Máximo de '+(c.max||16)+' jugadores alcanzado'
+        :minOk?'✅ ¡Hay suficientes jugadores!'
+        :'⏳ Faltan '+(Math.max(0,(c.min||12)-vanCount))+' jugadores más')
+      + '</div></div>'
+
+      // Avatars of confirmed
+      + (vanCount>0?'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">' + vanNames + '</div>':'')
+
+      // Response buttons for logged-in player
+      + (!isClosed && !isPast && IS_PLAYER && myKey ? (
+          '<div style="display:flex;gap:8px;margin-bottom:10px">'
+          + (vanCount>=(c.max||16) && myResp!=='si'
+            ? '<button disabled style="flex:1;padding:12px;border-radius:12px;border:2px solid rgba(255,71,87,.3);background:rgba(255,71,87,.08);color:#ff4757;font-weight:700;font-size:14px;opacity:.6">🔴 Completo</button>'
+            : '<button onclick="respondConv(''+c._key+'','si')" style="flex:1;padding:12px;border-radius:12px;border:2px solid '+(myResp==='si'?'#00ff88':'rgba(0,255,136,.3)')+';background:'+(myResp==='si'?'rgba(0,255,136,.2)':'var(--s2)')+';color:'+(myResp==='si'?'#00ff88':'var(--mu)')+';font-weight:700;font-size:14px;cursor:pointer;transition:all .2s">✅ Voy</button>'
+            )
+          + '<button onclick="respondConv(''+c._key+'','no')" style="flex:1;padding:12px;border-radius:12px;border:2px solid '+(myResp==='no'?'#ff4757':'rgba(255,71,87,.3)')+';background:'+(myResp==='no'?'rgba(255,71,87,.2)':'var(--s2)')+';color:'+(myResp==='no'?'#ff4757':'var(--mu)')+';font-weight:700;font-size:14px;cursor:pointer;transition:all .2s">❌ No puedo</button>'
+          + '</div>'
+          + (myResp?'<div style="font-size:11px;color:var(--mu);text-align:center">Tu respuesta: <b style="color:'+(myResp==='si'?'#00ff88':'#ff4757')+'">'+(myResp==='si'?'✅ Vas':'❌ No puedes')+'</b> · Puedes cambiarla</div>':'<div style="font-size:11px;color:#ffd700;text-align:center">⚠️ Aún no has confirmado tu asistencia</div>')
+        ) : (!IS_PLAYER && !IS_ADMIN && !isClosed && !isPast
+          ? '<div class="alert alert-info">👤 Inicia sesión como jugador para confirmar asistencia</div>'
+          : ''))
+
+      // Admin actions
+      + (IS_ADMIN && !isClosed && vanCount>=2 ? (
+          '<div class="divider"></div>'
+          + '<button onclick="startMatchFromConv(''+c._key+'')" class="btn btn-primary btn-full" style="margin-bottom:8px">🚀 Crear Partido con los Confirmados</button>'
+          + '<button onclick="closeConv(''+c._key+'')" class="btn btn-secondary btn-full">🔒 Cerrar Convocatoria</button>'
+        ) : '')
+      + '</div>';
+  }).join('');
+}
+
+window.createConvocatoria = async() => {
+  const title = el('conv-title')?.value?.trim();
+  const date  = el('conv-date')?.value;
+  const time  = el('conv-time')?.value||'19:00';
+  const lugar = el('conv-lugar')?.value?.trim();
+  const min   = parseInt(el('conv-min')?.value)||14;
+  if(!title||!date){ toast('⚠️ Título y fecha obligatorios'); return; }
+  const max = parseInt(el('conv-max')?.value)||16;
+  await push(ref(db,'convocatorias'),{
+    title, date, time, lugar, min, max,
+    closed:false, responses:{},
+    createdAt: Date.now()
+  });
+  closeM('modal-add-conv');
+  ['conv-title','conv-date','conv-lugar'].forEach(id=>{ const e=el(id); if(e) e.value=''; });
+  toast('📋 ¡Convocatoria creada! Los jugadores ya pueden confirmar.');
+  showPage('convocatoria', document.querySelector('.nav-btn'));
+};
+
+window.respondConv = async(convKey, resp) => {
+  if(!IS_PLAYER || !PLAYER_KEY){ toast('👤 Inicia sesión como jugador'); return; }
+  await set(ref(db,'convocatorias/'+convKey+'/responses/'+PLAYER_KEY), resp);
+  toast(resp==='si'?'✅ ¡Confirmado! Nos vemos en el campo':'❌ Anotado. ¡La próxima!');
+};
+
+window.closeConv = (key) => {
+  confirm2('¿Cerrar la convocatoria? Los jugadores ya no podrán responder.', async()=>{
+    await update(ref(db,'convocatorias/'+key), {closed:true});
+    toast('🔒 Convocatoria cerrada');
+  }, 'Cerrar');
+};
+
+window.deleteConv = (key) => {
+  confirm2('¿Eliminar esta convocatoria?', async()=>{
+    await remove(ref(db,'convocatorias/'+key));
+    toast('🗑️ Convocatoria eliminada');
+  });
+};
+
+window.startMatchFromConv = async(convKey) => {
+  const conv = S.convocatorias[convKey];
+  if(!conv){ toast('⚠️ Convocatoria no encontrada'); return; }
+  const responses = conv.responses||{};
+  const allConfirmed = Object.entries(responses)
+    .filter(([,v])=>v==='si')
+    .map(([k])=>k)
+    .filter(k=>S.players[k]);
+  if(allConfirmed.length < 2){ toast('⚠️ Necesitas al menos 2 jugadores confirmados'); return; }
+  // Respect max (16) but admin loads all confirmed - they can adjust manually
+  const maxPlayers = conv.max || 16;
+  const confirmedKeys = allConfirmed.slice(0, maxPlayers);
+  if(allConfirmed.length > maxPlayers) {
+    toast('⚠️ Se han cargado los primeros '+maxPlayers+' confirmados (máximo). Puedes ajustar manualmente.');
+  }
+  // Set as selected players - admin can add/remove before starting
+  selIds = new Set(confirmedKeys);
+  // Set match date from convocatoria
+  const dateEl = el('match-date');
+  if(dateEl && conv.date) dateEl.value = conv.date;
+  // Close conv and go to partidos
+  await update(ref(db,'convocatorias/'+convKey), {closed:true});
+  showPage('partidos', document.querySelector('.nav-btn:nth-child(3)'));
+  switchTab('crear', el('tab-crear'));
+  const extras = pArr().filter(p=>!selIds.has(p._key) && !p.lesionado && !p.sancionado).length;
+  toast('✅ '+confirmedKeys.length+' jugadores confirmados cargados.'+(extras?' Puedes añadir más desde la lista.':''));
+};
+
 // ── INIT ───────────────────────────────────────────────
 el('header-date').textContent=new Date().toLocaleDateString('es-ES',{day:'numeric',month:'short'});
 el('match-date').valueAsDate=new Date();
@@ -1792,6 +1949,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     </div>
   </div>
   <div id="home-bday"></div>
+  <div id="home-conv-alert"></div>
   <div id="home-mvp"></div>
   <div id="home-active"></div>
   <div class="stats-grid" id="home-stats"></div>
@@ -1884,6 +2042,13 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <button class="fab admin-only" onclick="openM('modal-add-news')" style="display:none">+</button>
 </div>
 
+<!-- CONVOCATORIA -->
+<div class="page" id="page-convocatoria">
+  <div class="section-title"><div class="dot"></div>📋 Convocatorias</div>
+  <div id="conv-list"></div>
+  <button class="fab admin-only" onclick="openM('modal-add-conv')" style="display:none">+</button>
+</div>
+
 <!-- TEMPORADAS -->
 <div class="page" id="page-temporadas">
   <div class="section-title"><div class="dot"></div>Temporadas</div>
@@ -1910,9 +2075,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       </select>
     </div>
     <div class="form-group"><label class="form-label">Día de pago del periodo</label><input type="number" class="form-input" id="cfg-dia-pago" min="1" max="31"></div>
-    <div class="form-group admin-only"><label class="form-label">🔑 PIN Admin</label><input type="password" class="form-input" id="cfg-pin" placeholder="Nuevo PIN admin"></div>
-    <div class="form-group admin-only"><label class="form-label">💰 PIN Tesorero</label><input type="password" class="form-input" id="cfg-tes-pin" placeholder="Nuevo PIN tesorero"></div>
-    <div class="form-group admin-only"><label class="form-label">👤 PIN Jugadores</label><input type="password" class="form-input" id="cfg-player-pin" placeholder="Nuevo PIN jugadores"></div>
+    <div class="form-group admin-only"><label class="form-label">🔑 Cambiar PIN admin</label><input type="password" class="form-input" id="cfg-pin" placeholder="Nuevo PIN"></div>
     <button class="btn btn-primary btn-full admin-only" onclick="saveConfig()" style="margin-bottom:8px">💾 Guardar</button>
     <div style="text-align:center;font-size:12px;color:var(--mu)">🔒 Accede como admin para editar</div>
   </div>
@@ -1949,6 +2112,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('calendario',null)"><span style="font-size:24px">📅</span><span>Calendario</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('caja',null)"><span style="font-size:24px">💰</span><span>Caja</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('noticias',null)"><span style="font-size:24px">📢</span><span>Noticias</span></button>
+      <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('convocatoria',null)"><span style="font-size:24px">📋</span><span>Convocatoria</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('temporadas',null)"><span style="font-size:24px">🔄</span><span>Temporadas</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('ajustes',null)"><span style="font-size:24px">⚙️</span><span>Ajustes</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px;grid-column:1/-1" onclick="closeM('modal-more');showPage('muro',null)"><span style="font-size:24px">🏆😤</span><span>Gloria & Vergüenza</span></button>
@@ -1960,28 +2124,10 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 <div class="modal-overlay" id="modal-login" onclick="closeBg(event,'modal-login')">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <div class="modal-title">🔑 Acceder</div>
-    <!-- Role selector -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
-      <button type="button" id="role-btn-admin" onclick="selectRole('admin')"
-        style="padding:10px 4px;border-radius:10px;border:2px solid rgba(255,214,0,.4);background:rgba(255,214,0,.1);color:#ffd700;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">
-        🔓<br>Admin
-      </button>
-      <button type="button" id="role-btn-tesorero" onclick="selectRole('tesorero')"
-        style="padding:10px 4px;border-radius:10px;border:2px solid var(--b);background:var(--s2);color:var(--mu);font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">
-        💰<br>Tesorero
-      </button>
-      <button type="button" id="role-btn-jugador" onclick="selectRole('jugador')"
-        style="padding:10px 4px;border-radius:10px;border:2px solid var(--b);background:var(--s2);color:var(--mu);font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">
-        👤<br>Jugador
-      </button>
-    </div>
-    <input type="hidden" id="selected-role" value="admin">
-    <div class="form-group">
-      <label class="form-label">PIN</label>
-      <input type="password" class="form-input" id="admin-pin" placeholder="••••" inputmode="numeric" maxlength="8" onkeydown="if(event.key==='Enter')doLogin()">
-    </div>
-    <button class="btn btn-primary btn-full" id="btn-do-login" onclick="doLogin()">🔓 Entrar</button>
+    <div class="modal-title">🔑 Acceso Admin</div>
+    <div class="alert alert-info">Solo el admin gestiona jugadores, partidos y la peña.</div>
+    <div class="form-group"><label class="form-label">PIN</label><input type="password" class="form-input" id="admin-pin" placeholder="••••" inputmode="numeric" maxlength="8" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button class="btn btn-primary btn-full" onclick="doLogin()">🔓 Entrar</button>
     <div style="text-align:center;font-size:11px;color:var(--mu);margin-top:10px">PIN por defecto: <b>1234</b></div>
   </div>
 </div>
@@ -2061,15 +2207,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 
 <!-- PROFILE -->
 <div class="modal-overlay" id="modal-profile" onclick="closeBg(event,'modal-profile')">
-  <div class="modal-sheet">
-    <div class="modal-handle"></div>
-    <div style="display:flex;align-items:center;margin-bottom:14px">
-      <button onclick="closeM('modal-profile')" style="display:flex;align-items:center;gap:6px;background:var(--s2);border:1px solid var(--b);border-radius:10px;padding:8px 14px;color:var(--tx);font-size:13px;cursor:pointer;font-family:var(--fb);font-weight:600">← Volver</button>
-      <div style="flex:1;text-align:center;font-family:var(--fd);font-size:16px;color:var(--mu)">Perfil</div>
-      <div style="width:72px"></div>
-    </div>
-    <div id="profile-content"></div>
-  </div>
+  <div class="modal-sheet"><div class="modal-handle"></div><div id="profile-content"></div></div>
 </div>
 
 <!-- MATCH RESULT -->
@@ -2203,6 +2341,43 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <button class="btn btn-secondary" style="flex:1" onclick="closeM('modal-manual-teams')">Cancelar</button>
       <button class="btn btn-primary" style="flex:1" onclick="confirmManualTeams()">🚀 Iniciar Partido</button>
     </div>
+  </div>
+</div>
+
+<!-- ADD CONVOCATORIA -->
+<div class="modal-overlay" id="modal-add-conv" onclick="closeBg(event,'modal-add-conv')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📋 Nueva Convocatoria</div>
+    <div class="form-group">
+      <label class="form-label">Título</label>
+      <input type="text" class="form-input" id="conv-title" placeholder="Partido del viernes...">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Fecha</label>
+        <input type="date" class="form-input" id="conv-date">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Hora</label>
+        <input type="time" class="form-input" id="conv-time" value="19:00">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Lugar</label>
+      <input type="text" class="form-input" id="conv-lugar" placeholder="Campo municipal...">
+    </div>
+    <div class="form-row">
+    <div class="form-group">
+      <label class="form-label">Mínimo jugadores</label>
+      <input type="number" class="form-input" id="conv-min" placeholder="12" value="12" min="2" max="16">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Máximo jugadores</label>
+      <input type="number" class="form-input" id="conv-max" placeholder="16" value="16" min="2" max="30">
+    </div>
+    </div>
+    <button class="btn btn-primary btn-full" onclick="createConvocatoria()">📋 Crear Convocatoria</button>
   </div>
 </div>
 

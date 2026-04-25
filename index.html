@@ -28,12 +28,10 @@ const db = getDatabase(app);
 
 // ── STATE ──────────────────────────────────────────────
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
-          events:[], caja:[], news:[], votes:{}, chat:[], seasons:[],
-          convocatorias:{} };
-let IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
-let IS_TESORERO = localStorage.getItem('pfm_tesorero') === '1';
-let IS_PLAYER = localStorage.getItem('pfm_player') === '1';    // jugador logueado
-let PLAYER_KEY = localStorage.getItem('pfm_player_key') || null;    // key del jugador logueado
+          events:[], caja:[], news:[], votes:{}, chat:[], seasons:[] };
+let IS_ADMIN = false;
+let IS_PLAYER = false;    // jugador logueado
+let PLAYER_KEY = null;    // key del jugador logueado
 let currentPage = 'home';
 let playerFilter = 'todos';
 let rankMode = 'points';
@@ -44,15 +42,16 @@ let confirmCb=null, editingKey=null, photoB64=null;
 // ── FIREBASE ───────────────────────────────────────────
 function startListeners(){
   try {
-    onValue(ref(db,'config'),      s=>{ try{ S.config=s.val()||{peña:'Peña 3 Tiempo',cuota:20,diaPago:1}; syncConfig(); syncTesoreroUi(); go(); }catch(e){showErr(e,'config');} });
-    onValue(ref(db,'players'),     s=>{ try{ S.players=s.val()||{}; syncPlayerUi(); go(); }catch(e){showErr(e,'players');} });
+    onValue(ref(db,'config'),      s=>{ try{ S.config=s.val()||{peña:'Peña 3 Tiempo',cuota:20,diaPago:1}; syncConfig(); go(); }catch(e){showErr(e,'config');} });
+    onValue(ref(db,'players'),     s=>{ try{ S.players=s.val()||{}; go(); }catch(e){showErr(e,'players');} });
     onValue(ref(db,'matches'),     s=>{ try{ S.matches=s.val()||{}; go(); }catch(e){showErr(e,'matches');} });
     onValue(ref(db,'activeMatch'), s=>{ try{ S.activeMatch=s.val()||null; go(); updateMvpBtn(); }catch(e){showErr(e,'activeMatch');} });
     onValue(ref(db,'events'),      s=>{ try{ S.events=arr(s.val()); go(); }catch(e){showErr(e,'events');} });
     onValue(ref(db,'caja'),        s=>{ try{ S.caja=arr(s.val()); go(); }catch(e){showErr(e,'caja');} });
     onValue(ref(db,'news'),        s=>{ try{ S.news=arr(s.val()); go(); }catch(e){showErr(e,'news');} });
     onValue(ref(db,'votes'),       s=>{ try{ S.votes=s.val()||{}; go(); }catch(e){showErr(e,'votes');} });
-    onValue(ref(db,'seasons'),     s=>{ try{ S.seasons=arr(s.val()); go(); }catch(e){showErr(e,'seasons');} });
+    onValue(ref(db,'chat'),        s=>{ try{ S.chat=arr(s.val()); renderChat(); }catch(e){showErr(e,'chat');} });
+    onValue(ref(db,'seasons'),     s=>{ try{ S.seasons=arr(s.val()); }catch(e){showErr(e,'seasons');} });
   } catch(e) { showErr(e,'startListeners'); }
 }
 
@@ -67,7 +66,6 @@ function syncConfig(){
   el('cfg-cuota').value=S.config.cuota||20;
   el('cfg-freq').value=S.config.frecuencia||1;
   el('cfg-dia-pago').value=S.config.diaPago||1;
-  if(el('cfg-tesorero-pin')) el('cfg-tesorero-pin').value='';
 }
 function updateMvpBtn(){
   const b=el('btn-close-voting');
@@ -75,9 +73,9 @@ function updateMvpBtn(){
 }
 function go(){
   try {
-    const fns={home:renderHome,jugadores:renderPlayers,partidos:renderPartidoPage,muro:renderMuro,convocatoria:renderConvocatoria,
+    const fns={home:renderHome,jugadores:renderPlayers,partidos:renderPartidoPage,muro:renderMuro,
       ranking:()=>renderRanking(rankMode),calendario:renderCalendario,
-      caja:renderCaja,noticias:renderNoticias,temporadas:renderTemporadas};
+      caja:renderCaja,noticias:renderNoticias,chat:renderChat,temporadas:renderTemporadas};
     fns[currentPage]?.();
   } catch(e) { showErr(e, 'render:'+currentPage); }
 }
@@ -133,91 +131,29 @@ window.showPage=(name,btn)=>{
   el('page-'+name).classList.add('active');
   btn?.classList.add('active');
   currentPage=name; go();
-  if(name==='partidos') switchTab('crear',el('tab-crear'));
+  if(name==='partidos'){
+    if(S.activeMatch) switchTab('activo',el('tab-activo'));
+    else switchTab('crear',el('tab-crear'));
+  }
 };
 window.openM=id=>el(id).classList.add('open');
 window.closeM=id=>el(id).classList.remove('open');
 window.closeBg=(e,id)=>{if(e.target===el(id))closeM(id);};
-
-
-function syncAdminUi(){
-  const adminBadge=el('admin-badge');
-  const loginBtn=el('btn-login');
-  if(adminBadge && loginBtn){
-    adminBadge.style.display=IS_ADMIN?'flex':'none';
-    loginBtn.style.display=IS_ADMIN?'none':'flex';
-  }
-  document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
-  syncTesoreroUi?.();
-  syncPlayerUi?.();
-  updateMvpBtn?.();
-}
-
-
-function canMoney(){ return IS_ADMIN || IS_TESORERO; }
-function moneyOnly(fn){if(!canMoney()){toast('🔒 Solo administrador o tesorero');return;}fn();}
-
-function syncPlayerUi(){
-  const badge=el('player-session-badge');
-  const btn=el('btn-player-login');
-  if(!badge||!btn)return;
-  if(IS_PLAYER && PLAYER_KEY && S.players && S.players[PLAYER_KEY]){
-    const p=S.players[PLAYER_KEY];
-    badge.style.display='flex';
-    badge.innerHTML=`👤 ${p.name} ✕`;
-    btn.style.display='none';
-  }else{
-    IS_PLAYER=false; PLAYER_KEY=null;
-    localStorage.removeItem('pfm_player');
-    localStorage.removeItem('pfm_player_key');
-    badge.style.display='none';
-    btn.style.display='flex';
-  }
-}
-function syncTesoreroUi(){
-  const badge=el('tesorero-badge');
-  const btn=el('btn-tesorero-login');
-  if(!badge||!btn)return;
-  badge.style.display=IS_TESORERO?'flex':'none';
-  btn.style.display=IS_TESORERO?'none':'flex';
-}
 
 // ── AUTH ───────────────────────────────────────────────
 window.doLogin=()=>{
   const pin=el('admin-pin').value;
   get(ref(db,'config/adminPin')).then(s=>{
     if(pin===(s.val()||'1234')){
-      IS_ADMIN=true;localStorage.setItem('pfm_admin','1');closeM('modal-login');
+      IS_ADMIN=true;closeM('modal-login');
       el('admin-badge').style.display='flex';el('btn-login').style.display='none';
       toast('🔓 Administrador activado');go();updateMvpBtn();
     }else toast('❌ PIN incorrecto');
   });
 };
 window.doLogout=()=>{
-  IS_ADMIN=false;localStorage.removeItem('pfm_admin');el('admin-badge').style.display='none';el('btn-login').style.display='flex';
+  IS_ADMIN=false;el('admin-badge').style.display='none';el('btn-login').style.display='flex';
   toast('🔒 Sesión cerrada');go();
-};
-
-
-window.openTesoreroLogin=()=>openM('modal-tesorero-login');
-window.doTesoreroLogin=()=>{
-  const pin=el('tesorero-pin').value;
-  const saved=S.config.tesoreroPin||'2222';
-  if(pin===saved){
-    IS_TESORERO=true;
-    localStorage.setItem('pfm_tesorero','1');
-    closeM('modal-tesorero-login');
-    syncTesoreroUi();
-    toast('💰 Tesorero activado');
-    go();
-  }else toast('❌ PIN tesorero incorrecto');
-};
-window.doTesoreroLogout=()=>{
-  IS_TESORERO=false;
-  localStorage.removeItem('pfm_tesorero');
-  syncTesoreroUi();
-  toast('💰 Sesión tesorero cerrada');
-  go();
 };
 
 // ── LOGIN DE JUGADOR ─────────────────────────────────
@@ -233,8 +169,6 @@ window.doPlayerLogin=async()=>{
   if(!found){toast('❌ Nombre o PIN incorrecto');return;}
   IS_PLAYER=true;
   PLAYER_KEY=found[0];
-  localStorage.setItem('pfm_player','1');
-  localStorage.setItem('pfm_player_key',PLAYER_KEY);
   closeM('modal-player-login');
   el('player-session-badge').style.display='flex';
   el('player-session-badge').innerHTML=`👤 ${found[1].name} ✕`;
@@ -245,8 +179,6 @@ window.doPlayerLogin=async()=>{
 
 window.doPlayerLogout=()=>{
   IS_PLAYER=false; PLAYER_KEY=null;
-  localStorage.removeItem('pfm_player');
-  localStorage.removeItem('pfm_player_key');
   el('player-session-badge').style.display='none';
   el('btn-player-login').style.display='flex';
   toast('👋 Sesión cerrada');go();
@@ -265,8 +197,7 @@ window.saveConfig=()=>adminOnly(async()=>{
     cuota:parseFloat(el('cfg-cuota').value)||20,
     frecuencia:parseInt(el('cfg-freq').value)||1,
     diaPago:parseInt(el('cfg-dia-pago').value)||1,
-    adminPin:np||(await get(ref(db,'config/adminPin'))).val()||'1234',
-    tesoreroPin:el('cfg-tesorero-pin')?.value||(await get(ref(db,'config/tesoreroPin'))).val()||'2222'
+    adminPin:np||(await get(ref(db,'config/adminPin'))).val()||'1234'
   });toast('✅ Configuración guardada');
 });
 
@@ -344,21 +275,6 @@ function renderHome(){
   el('home-active').innerHTML=S.activeMatch?`<div class="alert alert-warn" style="cursor:pointer" onclick="showPage('partidos',document.querySelector('.nav-btn:nth-child(3)'));switchTab('activo',el('tab-activo'))">⚽ <b>Partido en curso:</b> ${S.activeMatch.teamA?.name||'Morado'} <b>${S.activeMatch.scoreA||0}-${S.activeMatch.scoreB||0}</b> ${S.activeMatch.teamB?.name||'Amarillo'} · <span style="color:var(--ac)">Ver →</span></div>`:'';
 
   // MVP vote
-  // Convocatoria alert on home
-  const openConvs = Object.entries(S.convocatorias||{})
-    .map(([k,v])=>({...v,_key:k}))
-    .filter(c=>!c.closed && new Date(c.date+'T'+(c.time||'19:00'))>new Date());
-  const pendingConv = IS_PLAYER && PLAYER_KEY
-    ? openConvs.filter(c=>!(c.responses||{})[PLAYER_KEY])
-    : [];
-  const convEl = el('home-conv-alert');
-  if(convEl) {
-    convEl.innerHTML = pendingConv.length
-      ? '<div class="alert alert-warn" style="cursor:pointer" onclick="closeM('modal-more');showPage('convocatoria',null)">'
-        + '📋 <b>¡Hay '+pendingConv.length+' convocatoria'+( pendingConv.length>1?'s':'')+' pendiente'+( pendingConv.length>1?'s':'')+' de confirmación!</b> '
-        + '<span style="color:var(--ac)">Confirmar →</span></div>'
-      : '';
-  }
   el('home-mvp').innerHTML=S.activeMatch?.mvpVoting?`<div class="alert alert-info" style="cursor:pointer" onclick="openMvpVote()">🗳️ <b>¡Vota al MVP!</b> El partido ha terminado. <span style="color:var(--ac)">Votar →</span></div>`:'';
 
   // Noticias recientes
@@ -402,8 +318,6 @@ function renderPlayers(){
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${payBadge(p.pay)}
         ${deuda>0?`<div style="font-size:10px;color:#ff4757">Pend.</div>`:''}
-        ${(p.fineDebt||0)>0?`<span class="badge badge-warn">💸 ${p.fineDebt}€</span>`:''}
-        ${IS_ADMIN?`<button onclick="event.stopPropagation();addFine('${p._key}')" style="background:rgba(255,215,0,.12);border:1px solid rgba(255,215,0,.35);color:#ffd700;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:800">💸 Multa</button>`:''}
         ${p.bday?`<div style="font-size:10px;color:var(--mu)">🎂 ${fDateS(p.bday)}</div>`:''}
       </div>
     </div>`;}).join('');
@@ -421,32 +335,6 @@ window.waReminder=(key)=>{
   const msg=`Hola ${p.name} 👋 Te recordamos que tienes la cuota de la ${S.config.peña||'Peña'} pendiente: *${cuota}€*. ¡Gracias! ⚽`;
   window.open(`https://wa.me/34${p.phone.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`,'_blank');
 };
-
-window.addFine=(key)=>adminOnly(()=>{
-  const p=S.players[key]; if(!p)return;
-  confirm2(`¿Poner una multa de <b>3€</b> a <b>${p.name}</b>?`,async()=>{
-    const nextDebt=(p.fineDebt||0)+3;
-    const nextCount=(p.fineCount||0)+1;
-    await update(ref(db,`players/${key}`),{fineDebt:nextDebt,fineCount:nextCount});
-    toast(`💸 Multa añadida a ${p.name}: ${nextDebt}€ pendientes`);
-  },'Poner multa');
-});
-
-window.payFine=(key)=>moneyOnly(async()=>{
-  const p=S.players[key]; if(!p||(p.fineDebt||0)<=0)return;
-  const amount=Math.min(3,p.fineDebt||0);
-  const nextDebt=Math.max(0,(p.fineDebt||0)-amount);
-  await update(ref(db,`players/${key}`),{fineDebt:nextDebt});
-  await push(ref(db,'caja'),{
-    concepto:`Multa pagada - ${p.name}`,
-    importe:amount,
-    tipo:'ingreso',
-    categoria:'Multas',
-    date:new Date().toISOString().split('T')[0],
-    playerKey:key
-  });
-  toast(`✅ Multa pagada: ${p.name} ${amount}€`);
-});
 
 // Open add/edit player modal
 window.openAddP=()=>{
@@ -554,11 +442,11 @@ window.savePlayer=async()=>{
     lesionado:el('pf-lesionado').checked,sancionado:el('pf-sancionado').checked};
   if(editingKey){
     const ex=S.players[editingKey]||{};
-    Object.assign(data,{wins:ex.wins||0,played:ex.played||0,mvp:ex.mvp||0,captained:ex.captained||0,fineDebt:ex.fineDebt||0,fineCount:ex.fineCount||0});
+    Object.assign(data,{wins:ex.wins||0,played:ex.played||0,mvp:ex.mvp||0,captained:ex.captained||0});
     data.photo=photoB64||ex.photo||null;
     await set(ref(db,'players/'+editingKey),data);toast('✅ Jugador actualizado');
   }else{
-    Object.assign(data,{wins:0,played:0,mvp:0,captained:0,fineDebt:0,fineCount:0});
+    Object.assign(data,{wins:0,played:0,mvp:0,captained:0});
     if(photoB64)data.photo=photoB64;
     if(!data.playerPin) data.playerPin=''; // will be set by admin later
     await push(ref(db,'players'),data);toast('✅ Jugador añadido');
@@ -948,8 +836,6 @@ function renderCaja(){
   const gastos=S.caja.filter(c=>c.tipo==='gasto').reduce((s,c)=>s+(c.importe||0),0);
   const ingresos=S.caja.filter(c=>c.tipo==='ingreso').reduce((s,c)=>s+(c.importe||0),0);
   const saldo=ingresos-gastos;
-  const movs=[...S.caja].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
-  const multasPendientes=players.reduce((s,p)=>s+(p.fineDebt||0),0);
   const pagCnt=players.filter(p=>p.pay==='pagado').length;
   const pendCnt=players.filter(p=>p.pay!=='pagado').length;
   el('caja-stats').innerHTML=`
@@ -960,10 +846,10 @@ function renderCaja(){
   el('caja-bar').innerHTML='';
 
     // Pendientes simples
-  const pendList=players.filter(p=>p.pay!=='pagado'||((p.fineDebt||0)>0));
+  const pendList=players.filter(p=>p.pay!=='pagado');
   el('caja-deudas').innerHTML=pendList.length?`
     <div class="form-label" style="margin-bottom:8px">❌ Pendientes de Pago</div>
-    ${pendList.map(p=>`<div class="caja-row">${ava({...p,_key:p._key},30)}<div style="flex:1;font-size:13px;font-weight:600">${p.name}</div>${payBadge(p.pay)}${(p.fineDebt||0)>0?`<span class="badge badge-warn">💸 ${p.fineDebt}€</span>`:''}${IS_ADMIN&&(p.fineDebt||0)>0?`<button onclick="payFine('${p._key}')" style="background:rgba(0,255,136,.12);border:1px solid rgba(0,255,136,.35);color:#00ff88;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:800">Pagar 3€</button>`:''}${IS_ADMIN&&p.phone?`<button onclick="waReminder('${p._key}')" style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);color:#25d366;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700">📲</button>`:''}</div>`).join('')}`
+    ${pendList.map(p=>`<div class="caja-row">${ava({...p,_key:p._key},30)}<div style="flex:1;font-size:13px;font-weight:600">${p.name}</div>${payBadge(p.pay)}${IS_ADMIN&&p.phone?`<button onclick="waReminder('${p._key}')" style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);color:#25d366;border-radius:8px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700">📲</button>`:''}</div>`).join('')}`
     :'<div class="alert alert-ok">✅ ¡Todos al día!</div>';
   el('caja-movs').innerHTML=movs.length?movs.map(c=>`<div class="caja-row"><div style="font-size:20px">${c.tipo==='gasto'?'💸':'💰'}</div><div style="flex:1"><div style="font-size:13px;font-weight:600">${c.concepto}</div><div style="font-size:11px;color:var(--mu)">${fDateS(c.date)} · ${c.categoria||'General'}</div></div><div style="font-weight:700;color:${c.tipo==='gasto'?'#ff4757':'#00ff88'}">${c.tipo==='gasto'?'-':'+'}${c.importe||0}€</div>${IS_ADMIN?`<button onclick="delCaja('${c._key}')" style="background:none;border:none;color:#ff4757;font-size:16px;cursor:pointer">🗑️</button>`:''}</div>`).join(''):'<div class="empty-state"><div class="icon">💰</div><p>Sin movimientos</p></div>';
 }
@@ -1065,35 +951,6 @@ window.closeSeason=()=>adminOnly(async()=>{
   players.forEach(p=>{upd[`players/${p._key}/goals`]=0;upd[`players/${p._key}/wins`]=0;upd[`players/${p._key}/played`]=0;upd[`players/${p._key}/mvp`]=0;upd[`players/${p._key}/captained`]=0;upd[`players/${p._key}/assists`]=0;upd[`players/${p._key}/bonusPoints`]=0;upd[`players/${p._key}/yellowCards`]=0;upd[`players/${p._key}/redCards`]=0;});
   await update(ref(db),upd);
   closeM('modal-close-season');toast('🏆 Temporada archivada y stats reseteadas');
-});
-
-window.resetStatsOnly=()=>adminOnly(()=>{
-  confirm2('¿Resetear <b>estadísticas y partidos</b> sin guardar una temporada?',async()=>{
-    const players=pArr();
-    const upd={matches:null,activeMatch:null,votes:null};
-    players.forEach(p=>{
-      upd[`players/${p._key}/goals`]=0;
-      upd[`players/${p._key}/wins`]=0;
-      upd[`players/${p._key}/played`]=0;
-      upd[`players/${p._key}/mvp`]=0;
-      upd[`players/${p._key}/captained`]=0;
-      upd[`players/${p._key}/assists`]=0;
-      upd[`players/${p._key}/bonusPoints`]=0;
-      upd[`players/${p._key}/yellowCards`]=0;
-      upd[`players/${p._key}/redCards`]=0;
-    });
-    await update(ref(db),upd);
-    toast('🔄 Estadísticas reseteadas sin cerrar temporada');
-  },'Resetear');
-});
-
-window.deleteSeasonsHistory=()=>adminOnly(()=>{
-  confirm2('¿Borrar <b>todo el historial de temporadas</b>? Esta acción no toca jugadores ni partidos actuales.',async()=>{
-    await set(ref(db,'seasons'), null);
-    S.seasons=[];
-    renderTemporadas();
-    toast('🗑️ Historial de temporadas borrado');
-  },'Borrar');
 });
 
 
@@ -1351,7 +1208,7 @@ window.swapPlayer = (team, posIndex) => {
   let playersHtml = '';
   otherKeys.forEach((k,i) => {
     const p = S.players[k];
-    playersHtml += '<div class="player-item" style="cursor:pointer" onclick="doSwap(\''+team+'\','+posIndex+','+i+')">'
+    playersHtml += `<div class="player-item" style="cursor:pointer" onclick="doSwap('${team}',${posIndex},${i})">`
       + ava({...p,_key:k})
       + '<div class="pi"><div class="pn">'+(p?.name||'?')+'</div>'
       + '<div class="ps">'+(p?.pos||'')+' · '+calcPts(k)+'pts</div></div>'
@@ -1368,7 +1225,7 @@ window.swapPlayer = (team, posIndex) => {
     + '<div style="font-size:11px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:8px">Intercambiar con:</div>'
     + playersHtml
     + '<div class="divider"></div>'
-    + '<button class="btn btn-secondary btn-full" onclick="moveToOther(\''+team+'\','+posIndex+')">➡️ Mover a '+otherTeamLabel+'</button>';
+    + `<button class="btn btn-secondary btn-full" onclick="moveToOther('${team}',${posIndex})">➡️ Mover a ${otherTeamLabel}</button>`;
   openM('modal-swap-player');
 };
 
@@ -1596,187 +1453,9 @@ function renderMuro() {
   ].filter(Boolean).join('');
 }
 
-
-// ── CONVOCATORIA ─────────────────────────────────────────────
-function renderConvocatoria() {
-  document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
-  const cont = el('conv-list');
-  if(!cont) return;
-  const convs = Object.entries(S.convocatorias)
-    .map(([k,v])=>({...v,_key:k}))
-    .sort((a,b)=>new Date(b.date)-new Date(a.date));
-
-  if(!convs.length){
-    cont.innerHTML='<div class="empty-state"><div class="icon">📋</div><p>Sin convocatorias.<br>'
-      +(IS_ADMIN?'Pulsa + para crear una.':'El admin creará la convocatoria.')+'</p></div>';
-    return;
-  }
-
-  cont.innerHTML = convs.map(c => {
-    const responses = c.responses||{};
-    const players = pArr();
-    const vanList  = Object.entries(responses).filter(([,v])=>v==='si');
-    const noList   = Object.entries(responses).filter(([,v])=>v==='no');
-    const vanCount = vanList.length;
-    const noCount  = noList.length;
-    const pendCount= players.filter(p=>!responses[p._key]).length;
-    const minOk    = vanCount >= (c.min||14);
-    const myKey    = PLAYER_KEY;
-    const myResp   = myKey ? responses[myKey] : null;
-    const isClosed = c.closed;
-    const now      = new Date();
-    const convDate = new Date(c.date+'T'+(c.time||'19:00'));
-    const isPast   = convDate < now;
-
-    // Players who said yes
-    const vanNames = vanList.map(([k])=>{
-      const p=S.players[k]; return p?ava({...p,_key:k},26):'';
-    }).join('');
-
-    return '<div class="card" style="' + (isClosed?'opacity:.7':'') + '">'
-      // Header
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">'
-      + '<div>'
-      + '<div style="font-family:var(--fd);font-size:20px">' + (c.title||'Partido') + '</div>'
-      + '<div style="font-size:12px;color:var(--mu);margin-top:2px">📅 ' + fDate(c.date)
-        + (c.time?' · ⏰ '+c.time:'') + (c.lugar?' · 📍 '+c.lugar:'') + '</div>'
-      + '<div style="font-size:11px;color:var(--mu);margin-top:2px">👥 Min: <b style="color:#ffd700">'+(c.min||12)+'</b> · Max: <b style="color:#ff6b35">'+(c.max||16)+'</b></div>'
-      + '</div>'
-      + '<div style="display:flex;gap:6px;align-items:center">'
-      + (isClosed?'<span class="badge badge-warn">🔒 Cerrada</span>'
-        :isPast?'<span class="badge badge-warn">⏰ Pasada</span>'
-        :'<span class="badge badge-ok">🔴 Abierta</span>')
-      + (IS_ADMIN?'<button onclick="deleteConv(''+c._key+'')" style="background:none;border:none;color:#ff4757;font-size:18px;cursor:pointer">🗑️</button>':'')
-      + '</div></div>'
-
-      // Progress
-      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">'
-      + '<div class="stat-card" style="border-color:rgba(0,255,136,.3)">'
-      + '<div style="font-family:var(--fd);font-size:24px;color:#00ff88">' + vanCount + '</div>'
-      + '<div style="font-size:10px;color:var(--mu)">✅ Van</div></div>'
-      + '<div class="stat-card" style="border-color:rgba(255,71,87,.3)">'
-      + '<div style="font-family:var(--fd);font-size:24px;color:#ff4757">' + noCount + '</div>'
-      + '<div style="font-size:10px;color:var(--mu)">❌ No pueden</div></div>'
-      + '<div class="stat-card">'
-      + '<div style="font-family:var(--fd);font-size:24px;color:var(--mu)">' + pendCount + '</div>'
-      + '<div style="font-size:10px;color:var(--mu)">⏳ Sin contestar</div></div>'
-      + '</div>'
-
-      // Min players bar
-      + '<div style="margin-bottom:10px">'
-      + '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mu);margin-bottom:4px">'
-      + '<span>Jugadores confirmados</span>'
-      + '<span style="color:' + (minOk?'#00ff88':'#ffd700') + ';font-weight:700">'
-      + vanCount + ' / ' + (c.min||14) + ' min</span></div>'
-      + '<div class="progress-bar"><div class="progress-fill" style="width:'
-      + Math.min(100,Math.round(vanCount/(c.min||14)*100)) + '%"></div></div>'
-      + '<div style="font-size:10px;margin-top:3px;color:'
-        + (vanCount>=(c.max||16)?'#ff4757':minOk?'#00ff88':'#ffd700') + '">'
-      + (vanCount>=(c.max||16)?'🔴 ¡Completo! Máximo de '+(c.max||16)+' jugadores alcanzado'
-        :minOk?'✅ ¡Hay suficientes jugadores!'
-        :'⏳ Faltan '+(Math.max(0,(c.min||12)-vanCount))+' jugadores más')
-      + '</div></div>'
-
-      // Avatars of confirmed
-      + (vanCount>0?'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">' + vanNames + '</div>':'')
-
-      // Response buttons for logged-in player
-      + (!isClosed && !isPast && IS_PLAYER && myKey ? (
-          '<div style="display:flex;gap:8px;margin-bottom:10px">'
-          + (vanCount>=(c.max||16) && myResp!=='si'
-            ? '<button disabled style="flex:1;padding:12px;border-radius:12px;border:2px solid rgba(255,71,87,.3);background:rgba(255,71,87,.08);color:#ff4757;font-weight:700;font-size:14px;opacity:.6">🔴 Completo</button>'
-            : '<button onclick="respondConv(''+c._key+'','si')" style="flex:1;padding:12px;border-radius:12px;border:2px solid '+(myResp==='si'?'#00ff88':'rgba(0,255,136,.3)')+';background:'+(myResp==='si'?'rgba(0,255,136,.2)':'var(--s2)')+';color:'+(myResp==='si'?'#00ff88':'var(--mu)')+';font-weight:700;font-size:14px;cursor:pointer;transition:all .2s">✅ Voy</button>'
-            )
-          + '<button onclick="respondConv(''+c._key+'','no')" style="flex:1;padding:12px;border-radius:12px;border:2px solid '+(myResp==='no'?'#ff4757':'rgba(255,71,87,.3)')+';background:'+(myResp==='no'?'rgba(255,71,87,.2)':'var(--s2)')+';color:'+(myResp==='no'?'#ff4757':'var(--mu)')+';font-weight:700;font-size:14px;cursor:pointer;transition:all .2s">❌ No puedo</button>'
-          + '</div>'
-          + (myResp?'<div style="font-size:11px;color:var(--mu);text-align:center">Tu respuesta: <b style="color:'+(myResp==='si'?'#00ff88':'#ff4757')+'">'+(myResp==='si'?'✅ Vas':'❌ No puedes')+'</b> · Puedes cambiarla</div>':'<div style="font-size:11px;color:#ffd700;text-align:center">⚠️ Aún no has confirmado tu asistencia</div>')
-        ) : (!IS_PLAYER && !IS_ADMIN && !isClosed && !isPast
-          ? '<div class="alert alert-info">👤 Inicia sesión como jugador para confirmar asistencia</div>'
-          : ''))
-
-      // Admin actions
-      + (IS_ADMIN && !isClosed && vanCount>=2 ? (
-          '<div class="divider"></div>'
-          + '<button onclick="startMatchFromConv(''+c._key+'')" class="btn btn-primary btn-full" style="margin-bottom:8px">🚀 Crear Partido con los Confirmados</button>'
-          + '<button onclick="closeConv(''+c._key+'')" class="btn btn-secondary btn-full">🔒 Cerrar Convocatoria</button>'
-        ) : '')
-      + '</div>';
-  }).join('');
-}
-
-window.createConvocatoria = async() => {
-  const title = el('conv-title')?.value?.trim();
-  const date  = el('conv-date')?.value;
-  const time  = el('conv-time')?.value||'19:00';
-  const lugar = el('conv-lugar')?.value?.trim();
-  const min   = parseInt(el('conv-min')?.value)||14;
-  if(!title||!date){ toast('⚠️ Título y fecha obligatorios'); return; }
-  const max = parseInt(el('conv-max')?.value)||16;
-  await push(ref(db,'convocatorias'),{
-    title, date, time, lugar, min, max,
-    closed:false, responses:{},
-    createdAt: Date.now()
-  });
-  closeM('modal-add-conv');
-  ['conv-title','conv-date','conv-lugar'].forEach(id=>{ const e=el(id); if(e) e.value=''; });
-  toast('📋 ¡Convocatoria creada! Los jugadores ya pueden confirmar.');
-  showPage('convocatoria', document.querySelector('.nav-btn'));
-};
-
-window.respondConv = async(convKey, resp) => {
-  if(!IS_PLAYER || !PLAYER_KEY){ toast('👤 Inicia sesión como jugador'); return; }
-  await set(ref(db,'convocatorias/'+convKey+'/responses/'+PLAYER_KEY), resp);
-  toast(resp==='si'?'✅ ¡Confirmado! Nos vemos en el campo':'❌ Anotado. ¡La próxima!');
-};
-
-window.closeConv = (key) => {
-  confirm2('¿Cerrar la convocatoria? Los jugadores ya no podrán responder.', async()=>{
-    await update(ref(db,'convocatorias/'+key), {closed:true});
-    toast('🔒 Convocatoria cerrada');
-  }, 'Cerrar');
-};
-
-window.deleteConv = (key) => {
-  confirm2('¿Eliminar esta convocatoria?', async()=>{
-    await remove(ref(db,'convocatorias/'+key));
-    toast('🗑️ Convocatoria eliminada');
-  });
-};
-
-window.startMatchFromConv = async(convKey) => {
-  const conv = S.convocatorias[convKey];
-  if(!conv){ toast('⚠️ Convocatoria no encontrada'); return; }
-  const responses = conv.responses||{};
-  const allConfirmed = Object.entries(responses)
-    .filter(([,v])=>v==='si')
-    .map(([k])=>k)
-    .filter(k=>S.players[k]);
-  if(allConfirmed.length < 2){ toast('⚠️ Necesitas al menos 2 jugadores confirmados'); return; }
-  // Respect max (16) but admin loads all confirmed - they can adjust manually
-  const maxPlayers = conv.max || 16;
-  const confirmedKeys = allConfirmed.slice(0, maxPlayers);
-  if(allConfirmed.length > maxPlayers) {
-    toast('⚠️ Se han cargado los primeros '+maxPlayers+' confirmados (máximo). Puedes ajustar manualmente.');
-  }
-  // Set as selected players - admin can add/remove before starting
-  selIds = new Set(confirmedKeys);
-  // Set match date from convocatoria
-  const dateEl = el('match-date');
-  if(dateEl && conv.date) dateEl.value = conv.date;
-  // Close conv and go to partidos
-  await update(ref(db,'convocatorias/'+convKey), {closed:true});
-  showPage('partidos', document.querySelector('.nav-btn:nth-child(3)'));
-  switchTab('crear', el('tab-crear'));
-  const extras = pArr().filter(p=>!selIds.has(p._key) && !p.lesionado && !p.sancionado).length;
-  toast('✅ '+confirmedKeys.length+' jugadores confirmados cargados.'+(extras?' Puedes añadir más desde la lista.':''));
-};
-
 // ── INIT ───────────────────────────────────────────────
 el('header-date').textContent=new Date().toLocaleDateString('es-ES',{day:'numeric',month:'short'});
 el('match-date').valueAsDate=new Date();
-syncAdminUi();
-syncTesoreroUi();
-syncPlayerUi();
 startListeners();
 toast('☁️ Conectado en tiempo real',1500);
 </script>
@@ -1949,7 +1628,6 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     </div>
   </div>
   <div id="home-bday"></div>
-  <div id="home-conv-alert"></div>
   <div id="home-mvp"></div>
   <div id="home-active"></div>
   <div class="stats-grid" id="home-stats"></div>
@@ -2042,20 +1720,23 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <button class="fab admin-only" onclick="openM('modal-add-news')" style="display:none">+</button>
 </div>
 
-<!-- CONVOCATORIA -->
-<div class="page" id="page-convocatoria">
-  <div class="section-title"><div class="dot"></div>📋 Convocatorias</div>
-  <div id="conv-list"></div>
-  <button class="fab admin-only" onclick="openM('modal-add-conv')" style="display:none">+</button>
+<!-- CHAT -->
+<div class="page" id="page-chat">
+  <div class="section-title"><div class="dot"></div>Chat de la Peña</div>
+  <div class="form-group"><label class="form-label">Tu nombre en el chat</label><input type="text" class="form-input" id="chat-name" placeholder="Tu nombre..." style="margin-bottom:0"></div>
+  <div class="chat-container" id="chat-messages"></div>
+  <div style="display:flex;gap:8px;position:sticky;bottom:86px;background:var(--bg);padding:8px 0">
+    <input type="text" class="form-input" id="chat-input" placeholder="Escribe un mensaje..." onkeydown="handleChatKey(event)" style="flex:1">
+    <button class="btn btn-primary" style="width:auto;padding:11px 16px" onclick="sendChat()">➤</button>
+  </div>
 </div>
 
 <!-- TEMPORADAS -->
 <div class="page" id="page-temporadas">
   <div class="section-title"><div class="dot"></div>Temporadas</div>
   <div class="admin-only" style="display:none;margin-bottom:14px">
-    <button class="btn btn-gold btn-full" onclick="openM('modal-close-season')" style="margin-bottom:8px">🏆 Cerrar Temporada Actual</button>
-    <button class="btn btn-secondary btn-full" onclick="resetStatsOnly()" style="margin-bottom:8px">🔄 Resetear estadísticas sin cerrar temporada</button>
-    <button class="btn btn-danger btn-full" onclick="deleteSeasonsHistory()">🗑️ Borrar historial de temporadas</button>
+    <div class="alert alert-warn">⚠️ Cerrar temporada archiva el historial y <b>resetea todas las estadísticas</b>.</div>
+    <button class="btn btn-gold btn-full" onclick="openM('modal-close-season')">🏆 Cerrar Temporada Actual</button>
   </div>
   <div id="temporadas-list"></div>
 </div>
@@ -2112,7 +1793,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('calendario',null)"><span style="font-size:24px">📅</span><span>Calendario</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('caja',null)"><span style="font-size:24px">💰</span><span>Caja</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('noticias',null)"><span style="font-size:24px">📢</span><span>Noticias</span></button>
-      <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('convocatoria',null)"><span style="font-size:24px">📋</span><span>Convocatoria</span></button>
+      <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('chat',null)"><span style="font-size:24px">💬</span><span>Chat</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('temporadas',null)"><span style="font-size:24px">🔄</span><span>Temporadas</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px" onclick="closeM('modal-more');showPage('ajustes',null)"><span style="font-size:24px">⚙️</span><span>Ajustes</span></button>
       <button class="btn btn-secondary" style="flex-direction:column;gap:5px;padding:14px;height:76px;grid-column:1/-1" onclick="closeM('modal-more');showPage('muro',null)"><span style="font-size:24px">🏆😤</span><span>Gloria & Vergüenza</span></button>
@@ -2341,43 +2022,6 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <button class="btn btn-secondary" style="flex:1" onclick="closeM('modal-manual-teams')">Cancelar</button>
       <button class="btn btn-primary" style="flex:1" onclick="confirmManualTeams()">🚀 Iniciar Partido</button>
     </div>
-  </div>
-</div>
-
-<!-- ADD CONVOCATORIA -->
-<div class="modal-overlay" id="modal-add-conv" onclick="closeBg(event,'modal-add-conv')">
-  <div class="modal-sheet">
-    <div class="modal-handle"></div>
-    <div class="modal-title">📋 Nueva Convocatoria</div>
-    <div class="form-group">
-      <label class="form-label">Título</label>
-      <input type="text" class="form-input" id="conv-title" placeholder="Partido del viernes...">
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Fecha</label>
-        <input type="date" class="form-input" id="conv-date">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Hora</label>
-        <input type="time" class="form-input" id="conv-time" value="19:00">
-      </div>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Lugar</label>
-      <input type="text" class="form-input" id="conv-lugar" placeholder="Campo municipal...">
-    </div>
-    <div class="form-row">
-    <div class="form-group">
-      <label class="form-label">Mínimo jugadores</label>
-      <input type="number" class="form-input" id="conv-min" placeholder="12" value="12" min="2" max="16">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Máximo jugadores</label>
-      <input type="number" class="form-input" id="conv-max" placeholder="16" value="16" min="2" max="30">
-    </div>
-    </div>
-    <button class="btn btn-primary btn-full" onclick="createConvocatoria()">📋 Crear Convocatoria</button>
   </div>
 </div>
 

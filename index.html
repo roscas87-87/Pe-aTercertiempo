@@ -310,6 +310,12 @@ function streakBadge(s){
 
 // ── HOME ───────────────────────────────────────────────
 function renderHome(){
+  // Show skeleton if data not loaded yet
+  if(!Object.keys(S.players).length && !Object.keys(S.matches).length) {
+    el('home-stats') && (el('home-stats').innerHTML = skeletonStats());
+    el('home-pending') && (el('home-pending').innerHTML = skeletonCards(3));
+    el('home-news') && (el('home-news').innerHTML = skeletonCards(2));
+  }
   const players=pArr(), matches=mArr();
   const pagados=players.filter(p=>p.pay==='pagado').length;
   const pendientes=players.filter(p=>p.pay!=='pagado').length;
@@ -369,6 +375,11 @@ function renderPlayers(){
   if(playerFilter==='lesionados')list=list.filter(p=>p.lesionado||p.sancionado);
   else if(playerFilter!=='todos')list=list.filter(p=>p.pay===playerFilter);
   const cont=el('jugadores-list');
+  // Skeleton while loading
+  if(!list.length && !playerFilter && Object.keys(S.players).length===0) {
+    cont.innerHTML = skeletonCards(5);
+    return;
+  }
   if(!list.length){cont.innerHTML=`<div class="empty-state"><div class="icon">👤</div><p>${IS_ADMIN?'Pulsa + para añadir':'Sin jugadores'}</p></div>`;return;}
   cont.innerHTML=list.map(p=>{
     const badges=getBadges(p).slice(0,3);
@@ -718,6 +729,12 @@ window.startMatch=()=>adminOnly(async()=>{
     scoreA:0,scoreB:0,mvpVoting:false};
   await update(ref(db),upd);
   selIds.clear();toast('🚀 ¡Partido iniciado!');
+  // Send local notification to this device
+  sendLocalNotification(
+    '⚽ ¡Partido iniciado! - ' + (S.config.peña||'Peña 3 Tiempo'),
+    '💜 Morado vs 🟡 Amarillo · ¡Que empiece el juego!',
+    ''
+  );
   switchTab('activo',el('tab-activo'));
 });
 function renderActive(){
@@ -1580,6 +1597,140 @@ function renderMuro() {
   ].filter(Boolean).join('');
 }
 
+
+// ── SKELETON LOADING ─────────────────────────────────────────
+function skeletonCards(count=3) {
+  return Array.from({length:count}, () =>
+    '<div class="sk-card">'
+    + '<div class="skeleton sk-circle"></div>'
+    + '<div style="flex:1">'
+    + '<div class="skeleton sk-line w80"></div>'
+    + '<div class="skeleton sk-line w60"></div>'
+    + '</div>'
+    + '<div class="skeleton sk-line w40" style="height:20px;width:60px"></div>'
+    + '</div>'
+  ).join('');
+}
+
+function skeletonStats() {
+  return '<div class="stats-grid">'
+    + Array.from({length:4}, () =>
+        '<div class="stat-card"><div class="skeleton sk-line" style="height:32px;margin-bottom:6px"></div>'
+        + '<div class="skeleton sk-line w60" style="margin:0 auto"></div></div>'
+      ).join('')
+    + '</div>';
+}
+
+// ── ANIMATED COUNTER ──────────────────────────────────────────
+function animateCounter(el, target, duration=600) {
+  if (!el) return;
+  const start = parseInt(el.textContent) || 0;
+  const range = target - start;
+  const startTime = performance.now();
+  const update = (now) => {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    // Easing: ease out cubic
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const current = Math.round(start + range * eased);
+    el.textContent = current + (el.dataset.suffix || '');
+    if (progress < 1) requestAnimationFrame(update);
+  };
+  requestAnimationFrame(update);
+}
+
+function animateStatsGrid(containerId) {
+  const cards = document.querySelectorAll('#' + containerId + ' .sv');
+  cards.forEach((card, i) => {
+    const target = parseInt(card.textContent) || 0;
+    card.textContent = '0';
+    setTimeout(() => animateCounter(card, target), i * 120);
+  });
+}
+
+
+// ── PUSH NOTIFICATIONS (Web Push API) ────────────────────────
+const VAPID_PUBLIC_KEY = 'BEl62iUYgUivxIkv69yViEuiBIa40I5B7evVkdPy7SgfBBvGNBUiAMZD6DKxuF-L9X5kbJMw_lV6GxI5nJjH8M4';
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    toast('⚠️ Tu navegador no soporta notificaciones');
+    return false;
+  }
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') {
+    toast('🔕 Notificaciones bloqueadas. Actívalas en ajustes del navegador');
+    return false;
+  }
+  const permission = await Notification.requestPermission();
+  return permission === 'granted';
+}
+
+async function subscribeToNotifications() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+    });
+    // Save subscription to Firebase
+    const subData = JSON.parse(JSON.stringify(sub));
+    const devId = getDevId();
+    await set(ref(db, 'pushSubs/' + devId), {
+      endpoint: subData.endpoint,
+      keys: subData.keys,
+      ts: Date.now()
+    });
+    toast('🔔 ¡Notificaciones activadas!');
+    return sub;
+  } catch(e) {
+    console.error('Push subscription failed:', e);
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+// Send local notification (works without server, within the browser)
+function sendLocalNotification(title, body, icon) {
+  if (Notification.permission !== 'granted') return;
+  new Notification(title, {
+    body,
+    icon: icon || '/favicon.ico',
+    badge: '/favicon.ico',
+    vibrate: [200, 100, 200],
+    tag: 'pena-notif'
+  });
+}
+
+// Ask for notification permission on first load
+async function initNotifications() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    // Show a friendly prompt after 3 seconds
+    setTimeout(async () => {
+      const granted = await requestNotificationPermission();
+      if (granted) subscribeToNotifications();
+    }, 3000);
+  } else if (Notification.permission === 'granted') {
+    subscribeToNotifications();
+  }
+}
+
+window.enableNotifications = async () => {
+  const granted = await requestNotificationPermission();
+  if (granted) {
+    await subscribeToNotifications();
+  }
+};
+
 // ── INIT ───────────────────────────────────────────────
 el('header-date').textContent=new Date().toLocaleDateString('es-ES',{day:'numeric',month:'short'});
 el('match-date').valueAsDate=new Date();
@@ -1588,6 +1739,26 @@ syncTesoreroUi();
 syncPlayerUi();
 startListeners();
 toast('☁️ Conectado en tiempo real',1500);
+// Init push notifications
+if('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+}
+initNotifications();
+// Update notification status in ajustes
+setTimeout(() => {
+  const ns = document.getElementById('notif-status');
+  if(ns) {
+    if(!('Notification' in window)) ns.textContent = '❌ No soportado en este navegador';
+    else if(Notification.permission==='granted') {
+      ns.textContent='✅ Notificaciones activadas';
+      ns.style.color='#00ff88';
+      const btn = document.getElementById('btn-enable-notif');
+      if(btn) { btn.textContent='✅ Notificaciones activas'; btn.disabled=true; }
+    } else if(Notification.permission==='denied') {
+      ns.textContent='🔕 Bloqueadas en el navegador';
+    }
+  }
+}, 1000);
 </script>
 
 <style>
@@ -1707,6 +1878,59 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .muro-verg-card{background:linear-gradient(135deg,rgba(255,71,87,.06),var(--s));border:1px solid rgba(255,71,87,.18)}
 .muro-verg-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#ff4757,#a55eea)}
 .muro-emoji{font-size:28px;flex-shrink:0}
+
+/* ── SKELETON LOADING ─────────────────────────────── */
+.skeleton{background:linear-gradient(90deg,var(--s2) 25%,var(--s3) 50%,var(--s2) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:8px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.sk-line{height:12px;margin-bottom:8px;border-radius:6px}
+.sk-line.w60{width:60%}.sk-line.w80{width:80%}.sk-line.w40{width:40%}
+.sk-circle{width:42px;height:42px;border-radius:50%;flex-shrink:0}
+.sk-card{background:var(--s);border:1px solid var(--b);border-radius:var(--r);padding:14px;margin-bottom:10px;display:flex;align-items:center;gap:12px}
+
+/* ── PAGE TRANSITIONS ─────────────────────────────── */
+.page.active{animation:pageIn .28s cubic-bezier(.2,.8,.3,1) both}
+@keyframes pageIn{from{opacity:0;transform:translateY(14px) scale(.99)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+/* ── CARD HOVER ───────────────────────────────────── */
+.player-item{transition:transform .15s,background .15s,box-shadow .15s}
+.player-item:active{transform:scale(.98);box-shadow:0 2px 12px rgba(0,0,0,.3)}
+.rank-row{transition:transform .15s,background .15s}
+.rank-row:active{transform:scale(.98)}
+
+/* ── COUNTER ANIMATION ────────────────────────────── */
+.stat-value-animated{transition:all .6s cubic-bezier(.2,.8,.3,1)}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.sv{animation:countUp .5s ease both}
+
+/* ── FLOATING ACTION BUTTON ───────────────────────── */
+.fab{animation:fabIn .3s cubic-bezier(.2,.8,.3,1) both}
+@keyframes fabIn{from{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}
+.fab:hover{transform:scale(1.08);box-shadow:0 12px 28px rgba(124,58,237,.5)}
+
+/* ── BADGE PULSE ──────────────────────────────────── */
+.badge-ok{animation:none}
+.live-dot{animation:pulse 1.4s infinite}
+
+/* ── MODAL ENTRANCE ───────────────────────────────── */
+.modal-overlay.open .modal-sheet{animation:sheetUp .32s cubic-bezier(.2,.8,.3,1) both}
+@keyframes sheetUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+
+/* ── RIPPLE EFFECT ────────────────────────────────── */
+.btn{position:relative;overflow:hidden}
+.btn::after{content:'';position:absolute;inset:0;background:rgba(255,255,255,.15);opacity:0;border-radius:inherit;transition:opacity .3s}
+.btn:active::after{opacity:1;transition:none}
+
+/* ── NOTIFICATION BADGE ───────────────────────────── */
+.notif-badge{position:absolute;top:-4px;right:-4px;width:16px;height:16px;background:#ff4757;border-radius:50%;font-size:9px;font-weight:700;color:#fff;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg);animation:badgePop .3s cubic-bezier(.2,.8,.3,1)}
+@keyframes badgePop{from{transform:scale(0)}to{transform:scale(1)}}
+
+/* ── TOAST IMPROVEMENT ────────────────────────────── */
+.pfm-toast{animation:toastIn .25s cubic-bezier(.2,.8,.3,1) both}
+@keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+
+/* ── HERO SHINE ───────────────────────────────────── */
+@keyframes heroShine{0%,100%{opacity:.4}50%{opacity:.8}}
+
 ::-webkit-scrollbar{width:3px}
 ::-webkit-scrollbar-thumb{background:var(--s3);border-radius:2px}
 /* Toggle */
@@ -1881,6 +2105,16 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div style="text-align:center;font-size:12px;color:var(--mu)">🔒 Accede como admin para editar</div>
   </div>
   <button class="btn btn-gold btn-full admin-only" id="btn-close-voting" onclick="closeVoting()" style="display:none;margin-bottom:12px">🗳️ Cerrar Votación MVP y Guardar Partido</button>
+  <div class="card">
+    <div class="form-label" style="margin-bottom:10px">🔔 Notificaciones</div>
+    <div style="font-size:12px;color:var(--mu);margin-bottom:12px;line-height:1.6">
+      Recibe avisos cuando empiece un partido o salga el resultado.
+    </div>
+    <button class="btn btn-secondary btn-full" onclick="enableNotifications()" id="btn-enable-notif">
+      🔔 Activar Notificaciones
+    </button>
+    <div id="notif-status" style="font-size:11px;color:var(--mu);text-align:center;margin-top:8px"></div>
+  </div>
   <div class="card" style="text-align:center">
     <div style="font-family:var(--fd);font-size:18px;margin-bottom:6px">PEÑA 3 TIEMPO v4</div>
     <div style="font-size:11px;color:var(--mu);line-height:1.8">Datos en la nube ☁️ · Tiempo real 🔴<br>Instalar → <b style="color:#a78bfa">Compartir → Añadir al inicio</b></div>

@@ -29,9 +29,9 @@ const db = getDatabase(app);
 // ── STATE ──────────────────────────────────────────────
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
           events:[], caja:[], news:[], votes:{}, chat:[], seasons:[] };
-let IS_ADMIN = sessionStorage.getItem('pfm_admin') === '1';
-let IS_TESORERO = sessionStorage.getItem('pfm_tesorero') === '1';
-let IS_PLAYER = sessionStorage.getItem('pfm_player') === '1';    // jugador logueado
+let IS_ADMIN = localStorage.getItem('pfm_admin') === '1';
+let IS_TESORERO = localStorage.getItem('pfm_tesorero') === '1';
+let IS_PLAYER = localStorage.getItem('pfm_player') === '1';    // jugador logueado
 let PLAYER_KEY = localStorage.getItem('pfm_player_key') || null;    // key del jugador logueado
 let currentPage = 'home';
 let playerFilter = 'todos';
@@ -167,7 +167,7 @@ function syncPlayerUi(){
     btn.style.display='none';
   }else{
     IS_PLAYER=false; PLAYER_KEY=null;
-    sessionStorage.removeItem('pfm_player');
+    localStorage.removeItem('pfm_player');
     localStorage.removeItem('pfm_player_key');
     badge.style.display='none';
     btn.style.display='flex';
@@ -182,6 +182,29 @@ function syncTesoreroUi(){
 }
 
 // ── AUTH ───────────────────────────────────────────────
+window.selectRole = (role) => {
+  document.getElementById('selected-role').value = role;
+  const roles = ['admin','tesorero','jugador'];
+  const colors = {
+    admin:    {border:'rgba(255,214,0,.8)', bg:'rgba(255,214,0,.15)', color:'#ffd700'},
+    tesorero: {border:'rgba(0,212,255,.8)', bg:'rgba(0,212,255,.1)',  color:'#00d4ff'},
+    jugador:  {border:'rgba(124,58,237,.8)',bg:'rgba(124,58,237,.1)', color:'#a78bfa'},
+  };
+  roles.forEach(r => {
+    const btn = document.getElementById('role-btn-'+r);
+    if(!btn) return;
+    if(r === role) {
+      btn.style.borderColor = colors[r].border;
+      btn.style.background  = colors[r].bg;
+      btn.style.color       = colors[r].color;
+    } else {
+      btn.style.borderColor = 'var(--b)';
+      btn.style.background  = 'var(--s2)';
+      btn.style.color       = 'var(--mu)';
+    }
+  });
+};
+
 window.doLogin=()=>{
   const pin=el('admin-pin').value;
   get(ref(db,'config/adminPin')).then(s=>{
@@ -194,15 +217,15 @@ window.doLogin=()=>{
 };
 window.doTesLogout=()=>{
   IS_TESORERO=false;
-  sessionStorage.removeItem('pfm_tesorero');
-  el('tesorero-badge').style.display='none';
-  el('btn-tesorero-login') && (el('btn-tesorero-login').style.display='flex');
+  localStorage.removeItem('pfm_tesorero');
+  const tb=el('tesorero-badge');
+  if(tb) tb.style.display='none';
+  el('btn-login').style.display='flex';
   toast('💰 Sesión de tesorero cerrada');
   go();
 };
-
 window.doLogout=()=>{
-  IS_ADMIN=false;sessionStorage.removeItem('pfm_admin');el('admin-badge').style.display='none';el('btn-login').style.display='flex';
+  IS_ADMIN=false;localStorage.removeItem('pfm_admin');el('admin-badge').style.display='none';el('btn-login').style.display='flex';
   toast('🔒 Sesión cerrada');go();
 };
 
@@ -222,7 +245,7 @@ window.doTesoreroLogin=()=>{
 };
 window.doTesoreroLogout=()=>{
   IS_TESORERO=false;
-  sessionStorage.removeItem('pfm_tesorero');
+  localStorage.removeItem('pfm_tesorero');
   syncTesoreroUi();
   toast('💰 Sesión tesorero cerrada');
   go();
@@ -241,7 +264,7 @@ window.doPlayerLogin=async()=>{
   if(!found){toast('❌ Nombre o PIN incorrecto');return;}
   IS_PLAYER=true;
   PLAYER_KEY=found[0];
-  sessionStorage.setItem('pfm_player','1');
+  localStorage.setItem('pfm_player','1');
   localStorage.setItem('pfm_player_key',PLAYER_KEY);
   closeM('modal-player-login');
   el('player-session-badge').style.display='flex';
@@ -253,7 +276,7 @@ window.doPlayerLogin=async()=>{
 
 window.doPlayerLogout=()=>{
   IS_PLAYER=false; PLAYER_KEY=null;
-  sessionStorage.removeItem('pfm_player');
+  localStorage.removeItem('pfm_player');
   localStorage.removeItem('pfm_player_key');
   el('player-session-badge').style.display='none';
   el('btn-player-login').style.display='flex';
@@ -1198,7 +1221,7 @@ function buildRows(players, formRows, isBottom) {
 function calcXY(rows, isBottom, W, H) {
   const midY = H/2;
   const margin = 24;
-  const usable = midY - margin - 34;
+  const usable = midY - margin - 14;
   const positions = [];
   const totalRows = rows.length;
 
@@ -1215,8 +1238,7 @@ function calcXY(rows, isBottom, W, H) {
       y = (H - margin) - t * usable;
     }
     row.forEach((player, ci) => {
-      const pad = 20;
-      const x = pad + (W - pad*2) / (row.length + 1) * (ci + 1);
+      const x = W / (row.length + 1) * (ci + 1);
       positions.push({ player, x, y });
     });
   });
@@ -1233,13 +1255,12 @@ function playerDot(pos, color, textColor, teamId, idx) {
   const initials = (p.name||'?').slice(0,2).toUpperCase();
   const clickAttr = IS_ADMIN ? `onclick="swapPlayer('${teamId}',${idx})" style="cursor:pointer"` : '';
 
-  // Only show edit pencil during active match (not in preview)
-  const badge = (IS_ADMIN && S.activeMatch) ? `
-    <circle cx="${x+13}" cy="${y-13}" r="7" fill="rgba(0,0,0,.75)" opacity=".8"/>
+  const badge = IS_ADMIN ? `
+    <circle cx="${x+13}" cy="${y-13}" r="7" fill="rgba(0,0,0,.75)"/>
     <text x="${x+13}" y="${y-10}" text-anchor="middle" font-size="9" fill="white">✎</text>` : '';
 
   if (p.photo) return `<g ${clickAttr}>
-    <circle cx="${x}" cy="${y}" r="16" fill="${color}" opacity=".9"/>
+    <circle cx="${x}" cy="${y}" r="18" fill="${color}" opacity=".9"/>
     <image href="${p.photo}" x="${x-14}" y="${y-14}" width="28" height="28" style="clip-path:circle(14px at 14px 14px)"/>
     <circle cx="${x}" cy="${y}" r="18" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="2"/>
     ${badge}
@@ -1247,7 +1268,7 @@ function playerDot(pos, color, textColor, teamId, idx) {
   </g>`;
 
   return `<g ${clickAttr}>
-    <circle cx="${x}" cy="${y}" r="16" fill="${color}" opacity=".92"/>
+    <circle cx="${x}" cy="${y}" r="18" fill="${color}" opacity=".92"/>
     <circle cx="${x}" cy="${y}" r="18" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.5"/>
     <text x="${x}" y="${y+5}" text-anchor="middle" font-family="'Bebas Neue',sans-serif" font-size="12" fill="${textColor}">${initials}</text>
     ${badge}
@@ -1372,7 +1393,8 @@ window.doSwap = async(team,iA,iB)=>{
   const kA=[...(m.teamA?.players||[])], kB=[...(m.teamB?.players||[])];
   if(team==='A'){ [kA[iA],kB[iB]]=[kB[iB],kA[iA]]; }
   else           { [kB[iA],kA[iB]]=[kA[iB],kB[iA]]; }
-  await update(ref(db,'activeMatch'),{'teamA.players':kA,'teamB.players':kB});
+  await set(ref(db,'activeMatch/teamA/players'), kA);
+  await set(ref(db,'activeMatch/teamB/players'), kB);
   closeM('modal-swap-player'); toast('🔄 Jugadores intercambiados');
 };
 
@@ -1381,7 +1403,8 @@ window.moveToOther = async(team,idx)=>{
   const kA=[...(m.teamA?.players||[])], kB=[...(m.teamB?.players||[])];
   if(team==='A'){ kB.push(...kA.splice(idx,1)); }
   else           { kA.push(...kB.splice(idx,1)); }
-  await update(ref(db,'activeMatch'),{'teamA.players':kA,'teamB.players':kB});
+  await set(ref(db,'activeMatch/teamA/players'), kA);
+  await set(ref(db,'activeMatch/teamB/players'), kB);
   closeM('modal-swap-player'); toast('➡️ Jugador movido');
 };
 
@@ -1887,7 +1910,9 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       </select>
     </div>
     <div class="form-group"><label class="form-label">Día de pago del periodo</label><input type="number" class="form-input" id="cfg-dia-pago" min="1" max="31"></div>
-    <div class="form-group admin-only"><label class="form-label">🔑 Cambiar PIN admin</label><input type="password" class="form-input" id="cfg-pin" placeholder="Nuevo PIN"></div>
+    <div class="form-group admin-only"><label class="form-label">🔑 PIN Admin</label><input type="password" class="form-input" id="cfg-pin" placeholder="Nuevo PIN admin"></div>
+    <div class="form-group admin-only"><label class="form-label">💰 PIN Tesorero</label><input type="password" class="form-input" id="cfg-tes-pin" placeholder="Nuevo PIN tesorero"></div>
+    <div class="form-group admin-only"><label class="form-label">👤 PIN Jugadores</label><input type="password" class="form-input" id="cfg-player-pin" placeholder="Nuevo PIN jugadores"></div>
     <button class="btn btn-primary btn-full admin-only" onclick="saveConfig()" style="margin-bottom:8px">💾 Guardar</button>
     <div style="text-align:center;font-size:12px;color:var(--mu)">🔒 Accede como admin para editar</div>
   </div>
@@ -1935,10 +1960,28 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 <div class="modal-overlay" id="modal-login" onclick="closeBg(event,'modal-login')">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <div class="modal-title">🔑 Acceso Admin</div>
-    <div class="alert alert-info">Solo el admin gestiona jugadores, partidos y la peña.</div>
-    <div class="form-group"><label class="form-label">PIN</label><input type="password" class="form-input" id="admin-pin" placeholder="••••" inputmode="numeric" maxlength="8" onkeydown="if(event.key==='Enter')doLogin()"></div>
-    <button class="btn btn-primary btn-full" onclick="doLogin()">🔓 Entrar</button>
+    <div class="modal-title">🔑 Acceder</div>
+    <!-- Role selector -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+      <button type="button" id="role-btn-admin" onclick="selectRole('admin')"
+        style="padding:10px 4px;border-radius:10px;border:2px solid rgba(255,214,0,.4);background:rgba(255,214,0,.1);color:#ffd700;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">
+        🔓<br>Admin
+      </button>
+      <button type="button" id="role-btn-tesorero" onclick="selectRole('tesorero')"
+        style="padding:10px 4px;border-radius:10px;border:2px solid var(--b);background:var(--s2);color:var(--mu);font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">
+        💰<br>Tesorero
+      </button>
+      <button type="button" id="role-btn-jugador" onclick="selectRole('jugador')"
+        style="padding:10px 4px;border-radius:10px;border:2px solid var(--b);background:var(--s2);color:var(--mu);font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">
+        👤<br>Jugador
+      </button>
+    </div>
+    <input type="hidden" id="selected-role" value="admin">
+    <div class="form-group">
+      <label class="form-label">PIN</label>
+      <input type="password" class="form-input" id="admin-pin" placeholder="••••" inputmode="numeric" maxlength="8" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary btn-full" id="btn-do-login" onclick="doLogin()">🔓 Entrar</button>
     <div style="text-align:center;font-size:11px;color:var(--mu);margin-top:10px">PIN por defecto: <b>1234</b></div>
   </div>
 </div>
@@ -2020,10 +2063,10 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 <div class="modal-overlay" id="modal-profile" onclick="closeBg(event,'modal-profile')">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-      <button onclick="closeM('modal-profile')" style="background:var(--s2);border:1px solid var(--b);border-radius:10px;padding:7px 14px;color:var(--mu);font-size:13px;cursor:pointer;font-family:var(--fb)">← Volver</button>
-      <div style="font-size:11px;color:var(--mu)">Perfil del jugador</div>
-      <div style="width:70px"></div>
+    <div style="display:flex;align-items:center;margin-bottom:14px">
+      <button onclick="closeM('modal-profile')" style="display:flex;align-items:center;gap:6px;background:var(--s2);border:1px solid var(--b);border-radius:10px;padding:8px 14px;color:var(--tx);font-size:13px;cursor:pointer;font-family:var(--fb);font-weight:600">← Volver</button>
+      <div style="flex:1;text-align:center;font-family:var(--fd);font-size:16px;color:var(--mu)">Perfil</div>
+      <div style="width:72px"></div>
     </div>
     <div id="profile-content"></div>
   </div>

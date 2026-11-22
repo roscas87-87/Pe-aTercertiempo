@@ -1,8 +1,12 @@
 // ── PEÑA 3 TIEMPO - Service Worker ─────────────────────────────
-const CACHE_NAME = 'pena3tiempo-v1';
+const CACHE_NAME = 'pena3tiempo-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/logo.jpg',
+  '/favicon.png',
+  '/icon-192.png',
+  '/manifest.webmanifest',
 ];
 
 // ── INSTALL ─────────────────────────────────────────────────────
@@ -30,9 +34,11 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
-  // Skip Firebase requests (always need network)
-  if (event.request.url.includes('firebase') ||
-      event.request.url.includes('googleapis')) return;
+  const url = new URL(event.request.url);
+  // Solo cacheamos lo nuestro y las fuentes; Firebase siempre va por red
+  const isOwn = url.origin === self.location.origin;
+  const isFont = url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
+  if (!isOwn && !isFont) return;
 
   event.respondWith(
     fetch(event.request)
@@ -46,8 +52,11 @@ self.addEventListener('fetch', event => {
       })
       .catch(() => {
         // Offline fallback
-        return caches.match(event.request)
-          .then(cached => cached || caches.match('/index.html'));
+        return caches.match(event.request).then(cached => {
+          if (cached) return cached;
+          if (event.request.mode === 'navigate') return caches.match('/index.html');
+          return Response.error();
+        });
       })
   );
 });
@@ -56,7 +65,7 @@ self.addEventListener('fetch', event => {
 self.addEventListener('push', event => {
   let data = { title: '⚽ Peña 3 Tiempo', body: 'Tienes una notificación' };
   try {
-    data = event.data.json();
+    if (event.data) data = { ...data, ...event.data.json() };
   } catch(e) {
     if (event.data) data.body = event.data.text();
   }
@@ -64,8 +73,8 @@ self.addEventListener('push', event => {
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body:    data.body,
-      icon:    data.icon    || '/favicon.ico',
-      badge:   data.badge   || '/favicon.ico',
+      icon:    data.icon    || '/icon-192.png',
+      badge:   data.badge   || '/favicon.png',
       vibrate: data.vibrate || [200, 100, 200],
       tag:     data.tag     || 'pena-notif',
       data:    { url: data.url || '/' },

@@ -1,5 +1,5 @@
 // ── PEÑA 3 TIEMPO - Service Worker ─────────────────────────────
-const CACHE_NAME = 'pena3tiempo-v2';
+const CACHE_NAME = 'pena3tiempo-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

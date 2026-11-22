@@ -31,7 +31,7 @@ const db = getDatabase(app);
 
 // ── STATE ──────────────────────────────────────────────
 let S = { players:{}, matches:{}, activeMatch:null, config:{},
-          events:[], caja:[], news:[], votes:{}, chat:[], seasons:[], convocatorias:{} };
+          events:[], caja:[], news:[], votes:{}, chat:[], seasons:[], seasonsObj:{}, convocatorias:{} };
 let IS_ADMIN = false;
 let IS_PLAYER = false;    // jugador logueado
 let IS_TESORERO = false;
@@ -50,7 +50,7 @@ let confirmCb=null, editingKey=null, photoB64=null;
 // ── FIREBASE ───────────────────────────────────────────
 function startListeners(){
   try {
-    onValue(ref(db,'config'),      s=>{ try{ S.config=s.val()||{peña:'Peña 3 Tiempo',cuota:20,diaPago:1}; syncConfig(); go(); }catch(e){showErr(e,'config');} });
+    onValue(ref(db,'config'),      s=>{ try{ S.config=s.val()||{peña:'Peña 3 Tiempo',cuota:20,diaPago:1}; invalidatePtsCache(); syncConfig(); go(); }catch(e){showErr(e,'config');} });
     onValue(ref(db,'players'),     s=>{ try{ S.players=s.val()||{}; invalidatePtsCache(); go(); }catch(e){showErr(e,'players');} });
     onValue(ref(db,'matches'),     s=>{ try{ S.matches=s.val()||{}; invalidatePtsCache(); go(); }catch(e){showErr(e,'matches');} });
     onValue(ref(db,'activeMatch'), s=>{ try{ S.activeMatch=s.val()||null; go(); updateMvpBtn(); }catch(e){showErr(e,'activeMatch');} });
@@ -59,7 +59,7 @@ function startListeners(){
     onValue(ref(db,'news'),        s=>{ try{ S.news=arr(s.val()); go(); }catch(e){showErr(e,'news');} });
     onValue(ref(db,'votes'),       s=>{ try{ S.votes=s.val()||{}; go(); }catch(e){showErr(e,'votes');} });
     onValue(query(ref(db,'chat'),limitToLast(200)),        s=>{ try{ S.chat=arr(s.val()); renderChat(); }catch(e){showErr(e,'chat');} });
-    onValue(ref(db,'seasons'),     s=>{ try{ S.seasons=arr(s.val()); }catch(e){showErr(e,'seasons');} });
+    onValue(ref(db,'seasons'),     s=>{ try{ S.seasonsObj=s.val()||{}; S.seasons=arr(s.val()); invalidatePtsCache(); go(); }catch(e){showErr(e,'seasons');} });
     onValue(ref(db,'convocatorias'),s=>{ try{ S.convocatorias=s.val()||{}; go(); }catch(e){showErr(e,'convocatorias');} });
   } catch(e) { showErr(e,'startListeners'); }
 }
@@ -253,6 +253,7 @@ window.saveConfig=()=>adminOnly(async()=>{
     frecuencia:parseInt(el('cfg-freq')?.value)||cur.frecuencia||1,
     diaPago:   parseInt(el('cfg-dia-pago').value)||cur.diaPago||1,
     adminPin:  np||cur.adminPin||'',
+    activeSeason: cur.activeSeason||null,
     tesPin:    el('cfg-tes-pin')?.value||cur.tesPin||'',
     
   });
@@ -280,16 +281,57 @@ const _ptsCache=new Map();
 function invalidatePtsCache(){_ptsCache.clear();}
 function calcPts(key){
   if(_ptsCache.has(key))return _ptsCache.get(key);
-  let pts=0;
-  for(const m of getMs(key)){
-    const inA=(m.teamA?.players||[]).includes(key);
-    if(m.winner==='draw')pts+=1;
-    else if((m.winner==='A'&&inA)||(m.winner==='B'&&!inA))pts+=3;
-  }
-  const total=pts+(S.players[key]?.bonusPoints||0);
+  const total=seasonStats(key).pts;
   _ptsCache.set(key,total);
   return total;
 }
+
+// ── TEMPORADAS: motor ──────────────────────────────────
+// Temporada activa = la de config/activeSeason que no tenga fecha de fin
+function activeSeason(){
+  const id=S.config?.activeSeason; const s=id&&S.seasonsObj[id];
+  return s&&!s.endDate?{...s,_key:id}:null;
+}
+// Partidos de una temporada (null = partidos sin temporada, modo antiguo)
+function seasonMatches(s=activeSeason()){
+  return mArr().filter(m=>s?m.seasonId===s._key:!m.seasonId)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.savedAt||0)-(b.savedAt||0));
+}
+// Estadísticas de un jugador en una temporada = puntos iniciales + partidos jugados
+function seasonStats(key,s=activeSeason()){
+  const ini=(s?.initial||{})[key]||{};
+  const st={pts:+ini.pts||0,played:+ini.played||0,wins:+ini.wins||0,draws:+ini.draws||0,goals:+ini.goals||0,mvp:+ini.mvp||0,form:[]};
+  st.losses=Math.max(0,st.played-st.wins-st.draws);
+  for(const m of seasonMatches(s)){
+    const inA=(m.teamA?.players||[]).includes(key), inB=(m.teamB?.players||[]).includes(key);
+    if(!inA&&!inB)continue;
+    st.played++;
+    if(m.winner==='draw'){st.draws++;st.pts+=1;st.form.push('E');}
+    else if((m.winner==='A'&&inA)||(m.winner==='B'&&inB)){st.wins++;st.pts+=3;st.form.push('V');}
+    else{st.losses++;st.form.push('D');}
+    st.goals+=(m.goalScorers||{})[key]||0;
+    if(m.mvp===key)st.mvp++;
+  }
+  st.pts+=S.players[key]?.bonusPoints||0;
+  return st;
+}
+function rankSort(a,b){return b.pts-a.pts||b.wins-a.wins||b.goals-a.goals||(a.name||'').localeCompare(b.name||'');}
+function seasonTable(s=activeSeason()){
+  return pArr().map(p=>({...p,...seasonStats(p._key,s)})).filter(r=>r.played>0||r.pts!==0).sort(rankSort);
+}
+function seasonSummary(s){
+  const t=seasonTable(s).map(r=>({key:r._key,name:r.name,pts:r.pts,played:r.played,wins:r.wins,draws:r.draws,losses:r.losses,goals:r.goals,mvp:r.mvp}));
+  const best=f=>{const r=[...t].sort((a,b)=>b[f]-a[f])[0];return r&&r[f]>0?r.name:null;};
+  return {totalMatches:seasonMatches(s).length,champion:t[0]?.name||null,topScorer:best('goals'),topMvp:best('mvp'),table:t};
+}
+function defaultSeasonName(){const d=new Date(),y=d.getFullYear();return d.getMonth()>=7?`Temporada ${y}-${String(y+1).slice(2)}`:`Temporada ${y-1}-${String(y).slice(2)}`;}
+function fDateW(str){if(!str)return'';return new Date(str+'T12:00:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'});}
+function formDots(form){return (form||[]).slice(-5).map(r=>`<span class="fd fd-${r}" title="${r}"></span>`).join('');}
+function miniTable(rows){
+  return `<table class="lt"><thead><tr><th>#</th><th class="nm">Jugador</th><th>PJ</th><th>V</th><th>G</th><th>Pts</th></tr></thead><tbody>${rows.map((p,i)=>`<tr><td class="pos pos-${i+1}">${i+1}</td><td class="nm"><div class="nmw">${ava(p,22)}<div class="nmt">${esc(p.name)}</div></div></td><td>${p.played||0}</td><td>${p.wins||0}</td><td>${p.goals||0}</td><td class="pts">${p.pts||0}</td></tr>`).join('')}</tbody></table>`;
+}
+function lastThursday(){const d=new Date();d.setDate(d.getDate()-((d.getDay()-4+7)%7));return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+window.setThursday=()=>{el('match-date').value=lastThursday();toast('📅 '+fDateW(lastThursday()));};
 function calcStreak(key){
   const ms=getMs(key).reverse();let s=0;
   for(const m of ms){const inA=(m.teamA?.players||[]).includes(key);const won=(m.winner==='A'&&inA)||(m.winner==='B'&&!inA);if(won)s++;else break;}
@@ -320,7 +362,12 @@ function renderHome(){
     <div class="stat-card"><div class="sv" style="color:#00ff88">${pagados}</div><div class="sl">Pagados</div></div>
     <div class="stat-card"><div class="sv" style="color:#ff4757">${pendientes}</div><div class="sl">Pendientes</div></div>
     <div class="stat-card"><div class="sv" style="color:#ffd700">${players.length}</div><div class="sl">Jugadores</div></div>
-    <div class="stat-card"><div class="sv" style="color:#7c3aed">${matches.length}</div><div class="sl">Partidos</div></div>`;
+    <div class="stat-card"><div class="sv" style="color:#7c3aed">${seasonMatches().length}</div><div class="sl">Jornadas</div></div>`;
+  const actS=activeSeason(), top3=seasonTable(actS).slice(0,3);
+  el('home-season').innerHTML=top3.length?`<div class="card" style="cursor:pointer" onclick="showPage('ranking',document.querySelectorAll('.nav-btn')[3])">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-family:var(--fd);font-size:20px">🏆 ${actS?esc(actS.name):'Clasificación'}</div><div style="font-size:11px;color:var(--mu)">Jornada ${seasonMatches(actS).length} →</div></div>
+    ${top3.map((p,i)=>`<div style="display:flex;align-items:center;gap:10px;padding:5px 0"><div style="width:18px;font-family:var(--fd);font-size:20px;color:${['#ffd700','#d8d8d8','#cd7f32'][i]}">${i+1}</div>${ava(p,30)}<div style="flex:1;font-weight:600;font-size:14px">${esc(p.name)}</div><div style="font-family:var(--fd);font-size:22px;color:#ffd700">${p.pts}<span style="font-size:10px;color:var(--mu)"> pts</span></div></div>`).join('')}
+  </div>`:'';
 
   // Cumpleaños hoy
   const today=new Date();const todayMD=`${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
@@ -339,7 +386,7 @@ function renderHome(){
   </div>`:'<div class="empty-state"><div class="icon">📅</div><p>Sin eventos próximos</p></div>';
 
   // Partido activo
-  el('home-active').innerHTML=S.activeMatch?`<div class="alert alert-warn" style="cursor:pointer" onclick="showPage('partidos',document.querySelector('.nav-btn:nth-child(3)'));switchTab('activo',el('tab-activo'))">⚽ <b>Partido en curso:</b> ${S.activeMatch.teamA?.name||'Morado'} <b>${S.activeMatch.scoreA||0}-${S.activeMatch.scoreB||0}</b> ${S.activeMatch.teamB?.name||'Amarillo'} · <span style="color:var(--ac)">Ver →</span></div>`:'';
+  el('home-active').innerHTML=S.activeMatch?`<div class="alert alert-warn" style="cursor:pointer" onclick="showPage('partidos',document.querySelector('.nav-btn:nth-child(3)'));switchTab('activo',document.getElementById('tab-activo'))">⚽ <b>Partido en curso:</b> ${S.activeMatch.teamA?.name||'Morado'} <b>${S.activeMatch.scoreA||0}-${S.activeMatch.scoreB||0}</b> ${S.activeMatch.teamB?.name||'Amarillo'} · <span style="color:var(--ac)">Ver →</span></div>`:'';
 
   // MVP vote
   checkConvAlert();
@@ -371,6 +418,7 @@ function renderPlayers(){
   const cont=el('jugadores-list');
   if(!list.length){cont.innerHTML=`<div class="empty-state"><div class="icon">👤</div><p>${IS_ADMIN?'Pulsa + para añadir':'Sin jugadores'}</p></div>`;return;}
   cont.innerHTML=list.map(p=>{
+    p={...p,...seasonStats(p._key)};
     const badges=getBadges(p).slice(0,3);
     const streak=calcStreak(p._key);
     const cuota=S.config.cuota||20;
@@ -528,8 +576,9 @@ window.deletePlayer=()=>{
 // Player profile with charts
 window.openProfile=(key)=>{
   const p={...S.players[key],_key:key};if(!p.name)return;
-  const pts=calcPts(key),streak=calcStreak(key),draws=countDraws(key);
-  const losses=Math.max(0,(p.played||0)-(p.wins||0)-draws);
+  const st=seasonStats(key);Object.assign(p,{goals:st.goals,wins:st.wins,played:st.played,mvp:st.mvp});
+  const pts=st.pts,streak=calcStreak(key),draws=st.draws;
+  const losses=st.losses;
   const ms=getMs(key).slice(-8);
   const badges=getBadges(p);
 
@@ -794,6 +843,7 @@ window.aG=(k,d)=>{tempGoals[k]=Math.max(0,(tempGoals[k]||0)+d);el('g-'+k).textCo
 window.aC=(k,t)=>{if(t==='y'){tempYellow[k]=(tempYellow[k]||0)+1;el('y-'+k).textContent=tempYellow[k];}else{tempRed[k]=(tempRed[k]||0)+1;el('r-'+k).textContent=tempRed[k];}};
 window.finalizeMatch=async()=>{
   const m=S.activeMatch;if(!m)return;
+  if(m.mvpVoting){toast('⚠️ Este partido ya está guardado');return;}
   const upd={};
   const sA=m.scoreA||0,sB=m.scoreB||0;
   const winner=sA>sB?'A':sB>sA?'B':'draw';
@@ -804,14 +854,19 @@ window.finalizeMatch=async()=>{
   (wt||[]).forEach(k=>{upd[`players/${k}/wins`]=(S.players[k]?.wins||0)+1;});
   const mvpSel=el('result-mvp').value;
   if(mvpSel)upd[`players/${mvpSel}/mvp`]=(S.players[mvpSel]?.mvp||0)+1;
-  const rec={...m,winner,mvp:mvpSel||null,goalScorers:Object.fromEntries(Object.entries(tempGoals).filter(([,g])=>g>0)),yellowCards:{...tempYellow},redCards:{...tempRed}};
+  const {mvpVoting,mvpCandidates,matchRecord,matchKey,...base}=m;
+  const rec={...base,winner,mvp:mvpSel||null,goalScorers:Object.fromEntries(Object.entries(tempGoals).filter(([,g])=>g>0)),yellowCards:{...tempYellow},redCards:{...tempRed},savedAt:Date.now()};
+  const act=activeSeason(); if(act) rec.seasonId=act._key;
+  // El partido se guarda YA en el historial; la votación MVP solo lo completa después
+  const mk=push(ref(db,'matches')).key;
+  upd['matches/'+mk]=rec;
   if(!mvpSel){
-    const allKeys=[...(m.teamA?.players||[]),...(m.teamB?.players||[])];
-    upd['activeMatch']={...m,winner,mvpVoting:true,mvpCandidates:allKeys,matchRecord:rec};
-    await update(ref(db),upd);toast('🗳️ ¡Votación MVP abierta!');
+    upd['activeMatch']={...base,winner,mvpVoting:true,mvpCandidates:[...(m.teamA?.players||[]),...(m.teamB?.players||[])],matchKey:mk};
+    upd['votes']=null;
+    await update(ref(db),upd);toast('✅ Partido guardado · 🗳️ Votación MVP abierta');
   }else{
     upd['activeMatch']=null;
-    await update(ref(db),upd);await push(ref(db,'matches'),rec);toast('🏆 ¡Partido guardado!');
+    await update(ref(db),upd);toast('🏆 ¡Partido guardado!');
   }
   tempGoals={};tempYellow={};tempRed={};closeM('modal-match-result');
   switchTab('historial',el('tab-historial'));
@@ -825,36 +880,49 @@ window.openMvpVote=()=>{
 };
 window.castVote=async(k)=>{await set(ref(db,'votes/'+getDevId()),k);toast('⭐ ¡Voto registrado!');closeM('modal-mvp-vote');};
 window.closeVoting=()=>adminOnly(async()=>{
-  if(!S.activeMatch?.mvpVoting)return;
-  const tally={};Object.values(S.votes||{}).forEach(k=>{tally[k]=(tally[k]||0)+1;});
+  const am=S.activeMatch; if(!am?.mvpVoting)return;
+  const tally={};Object.values(S.votes||{}).forEach(k=>{if((am.mvpCandidates||[]).includes(k))tally[k]=(tally[k]||0)+1;});
   const mvpKey=Object.entries(tally).sort((a,b)=>b[1]-a[1])[0]?.[0];
-  const rec={...S.activeMatch.matchRecord,mvp:mvpKey||null};
   const upd={'activeMatch':null,'votes':null};
   if(mvpKey)upd[`players/${mvpKey}/mvp`]=(S.players[mvpKey]?.mvp||0)+1;
-  await update(ref(db),upd);await push(ref(db,'matches'),rec);
-  toast(`⭐ MVP: ${S.players[mvpKey]?.name||'Nadie'} · Partido guardado!`);
+  if(am.matchKey){ if(mvpKey)upd[`matches/${am.matchKey}/mvp`]=mvpKey; }
+  else{ // partidos que quedaron a medias con la versión antigua
+    const rec={...am.matchRecord,mvp:mvpKey||null};const act=activeSeason();
+    if(act&&!rec.seasonId)rec.seasonId=act._key;
+    upd['matches/'+push(ref(db,'matches')).key]=rec;
+  }
+  await update(ref(db),upd);
+  toast(`⭐ MVP: ${S.players[mvpKey]?.name||'Nadie'}`);
 });
 function renderHistorial(){
-  const cont=el('historial-content');
-  const matches=mArr().sort((a,b)=>new Date(b.date)-new Date(a.date));
-  if(!matches.length){cont.innerHTML='<div class="empty-state"><div class="icon">📋</div><p>Sin partidos aún</p></div>';return;}
-  cont.innerHTML=matches.map(m=>{
+  const cont=el('historial-content');const act=activeSeason();
+  const ms=seasonMatches(act);
+  if(!ms.length){cont.innerHTML=`<div class="empty-state"><div class="icon">📋</div><p>Sin partidos ${act?'en '+esc(act.name):'aún'}</p></div>`;return;}
+  const head=`<div class="season-head">${act?'🏆 '+esc(act.name):'📋 Partidos'}<span>${ms.length} jornada${ms.length===1?'':'s'}</span></div>`;
+  cont.innerHTML=head+ms.map((m,i)=>({m,j:i+1})).reverse().map(({m,j})=>{
     const mvp=m.mvp?S.players[m.mvp]:null;
-    const scorers=m.goalScorers?Object.entries(m.goalScorers).filter(([,g])=>g>0).map(([k,g])=>{const p=S.players[k];return p?`⚽${p.name}(${g})`:''}).filter(Boolean).join(' · '):'';
-    return`<div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:11px;color:var(--mu)">${fDateS(m.date)}</div>
-        <div class="badge ${m.winner==='draw'?'badge-warn':'badge-ok'}">${m.winner==='draw'?'⚖️ Empate':'🏆 '+(m.winner==='A'?m.teamA?.name:m.teamB?.name)}</div>
+    const wA=m.winner==='A',wB=m.winner==='B';
+    const scorers=Object.entries(m.goalScorers||{}).filter(([,g])=>g>0).map(([k,g])=>{const p=S.players[k];return p?`⚽ ${esc(p.name)}${g>1?' ×'+g:''}`:''}).filter(Boolean).join(' · ');
+    return`<div class="match-card">
+      <div class="mc-top"><span class="mc-j">Jornada ${j}</span><span class="mc-date">${fDateW(m.date)}</span>
+        ${IS_ADMIN?`<span class="mc-actions"><button onclick="openEditMatch('${m._key}')" title="Editar">✏️</button><button onclick="delMatch('${m._key}')" title="Eliminar">🗑️</button></span>`:''}</div>
+      <div class="mc-score">
+        <div class="mc-team ${wA?'win':''}" style="color:#a78bfa">💜 ${esc(m.teamA?.name||'Morado')}</div>
+        <div class="mc-res">${m.scoreA??0}<span>–</span>${m.scoreB??0}</div>
+        <div class="mc-team ${wB?'win':''}" style="color:#ffd700;text-align:right">${esc(m.teamB?.name||'Amarillo')} 🟡</div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="color:#a78bfa;font-weight:600;font-size:14px">💜 ${m.teamA?.name||'A'}</div>
-        <div style="font-family:var(--fd);font-size:30px">${m.scoreA} - ${m.scoreB}</div>
-        <div style="color:#ffd700;font-weight:600;font-size:14px">🟡 ${m.teamB?.name||'B'}</div>
-      </div>
-      ${mvp?`<div style="text-align:center;margin-top:6px;font-size:12px;color:#ffd700">⭐ MVP: ${mvp.name}</div>`:''}
-      ${scorers?`<div style="margin-top:5px;font-size:11px;color:var(--mu)">${scorers}</div>`:''}
+      <div class="mc-foot">${m.winner==='draw'?'⚖️ Empate':'🏆 Gana '+esc(wA?m.teamA?.name:m.teamB?.name)}${mvp?` · ⭐ MVP <b>${esc(mvp.name)}</b>`:''}</div>
+      ${scorers?`<div class="mc-sc">${scorers}</div>`:''}
     </div>`;}).join('');
 }
+window.openEditMatch=k=>adminOnly(()=>{const m=S.matches[k];if(!m)return;el('em-key').value=k;el('em-date').value=m.date||'';el('em-a').value=m.scoreA||0;el('em-b').value=m.scoreB||0;openM('modal-edit-match');});
+window.saveEditMatch=()=>adminOnly(async()=>{
+  const k=el('em-key').value;if(!S.matches[k])return;
+  const a=Math.max(0,parseInt(el('em-a').value)||0),b=Math.max(0,parseInt(el('em-b').value)||0);
+  await update(ref(db,'matches/'+k),{date:el('em-date').value||S.matches[k].date||todayStr(),scoreA:a,scoreB:b,winner:a>b?'A':b>a?'B':'draw'});
+  closeM('modal-edit-match');toast('✅ Partido actualizado');
+});
+window.delMatch=k=>adminOnly(()=>confirm2('¿Eliminar este partido?<br><span style="font-size:12px;color:var(--mu)">Se quitará de la clasificación.</span>',async()=>{await remove(ref(db,'matches/'+k));toast('🗑️ Partido eliminado');}));
 window.sendWA=()=>{
   const m=S.activeMatch;if(!m){toast('⚠️ No hay partido activo');return;}
   const pA=(m.teamA?.players||[]).map(k=>S.players[k]).filter(Boolean);
@@ -877,25 +945,34 @@ window.switchRank=(mode,e)=>{rankMode=mode;document.querySelectorAll('#page-rank
 function renderRanking(mode){
   const players=pArr();const cont=el('ranking-list');
   if(!players.length){cont.innerHTML='<div class="empty-state"><div class="icon">🏆</div><p>Añade jugadores</p></div>';return;}
-  const enriched=players.map(p=>({...p,points:calcPts(p._key),streak:calcStreak(p._key),draws:countDraws(p._key)})).map(p=>({...p,losses:Math.max(0,(p.played||0)-(p.wins||0)-p.draws)}));
+  const act=activeSeason();
+  const head=`<div class="season-head">${act?'🏆 '+esc(act.name):'🏆 Clasificación'}<span>Jornada ${seasonMatches(act).length}</span></div>`;
+  const enriched=players.map(p=>{const st=seasonStats(p._key,act);return{...p,...st,points:st.pts,streak:calcStreak(p._key)};});
+  if(mode==='points'){
+    const t=enriched.filter(r=>r.played>0||r.pts!==0).sort(rankSort);
+    if(!t.length){cont.innerHTML=head+'<div class="empty-state"><div class="icon">🏁</div><p>Aún no hay partidos en esta temporada</p></div>';return;}
+    const pod=(p,place)=>p?`<div class="pod pod-${place}" onclick="openProfile('${p._key}')">${place===1?'<div style="font-size:20px;margin-bottom:-4px">👑</div>':''}${ava(p,place===1?60:46)}<div class="pod-name">${esc(p.name)}</div><div class="pod-pts">${p.pts}<small>pts</small></div><div class="pod-base">${place}</div></div>`:'<div class="pod"></div>';
+    cont.innerHTML=head
+      +`<div class="podium">${pod(t[1],2)}${pod(t[0],1)}${pod(t[2],3)}</div>`
+      +`<div class="card" style="padding:6px 4px"><table class="lt"><thead><tr><th>#</th><th class="nm">Jugador</th><th>PJ</th><th>V</th><th>E</th><th>D</th><th>G</th><th>Pts</th></tr></thead><tbody>`
+      +t.map((p,i)=>`<tr onclick="openProfile('${p._key}')"><td class="pos pos-${i+1}">${i+1}</td><td class="nm"><div class="nmw">${ava(p,26)}<div><div class="nmt">${esc(p.name)}</div><div style="margin-top:2px">${formDots(p.form)}</div></div></div></td><td>${p.played}</td><td>${p.wins}</td><td>${p.draws}</td><td>${p.losses}</td><td>${p.goals}</td><td class="pts">${p.pts}</td></tr>`).join('')
+      +`</tbody></table></div><div class="pts-legend"><span>Victoria <b style="color:#00ff88">3</b></span><span>Empate <b style="color:#ffd700">1</b></span><span>Derrota <b style="color:#ff4757">0</b></span><span style="margin-left:auto"><span class="fd fd-V"></span><span class="fd fd-E"></span><span class="fd fd-D"></span> últimos 5</span></div>`;
+    return;
+  }
   const cfgs={
-    points:{k:'points',l:'Puntos',i:'🎯',c:'#ffd700',s:(a,b)=>b.points-a.points||b.wins-a.wins},
-    wins:  {k:'wins',  l:'Victorias',i:'🏆',c:'#7c3aed',s:(a,b)=>(b.wins||0)-(a.wins||0)},
-    goals: {k:'goals', l:'Goles',   i:'⚽',c:'#00ff88',s:(a,b)=>(b.goals||0)-(a.goals||0)},
+    wins:  {k:'wins',  l:'Victorias',i:'🏆',c:'#7c3aed',s:(a,b)=>b.wins-a.wins},
+    goals: {k:'goals', l:'Goles',   i:'⚽',c:'#00ff88',s:(a,b)=>b.goals-a.goals},
     assists:{k:'assists',l:'Asist.',i:'🅰️',c:'#00d4ff',s:(a,b)=>(b.assists||0)-(a.assists||0)},
-    mvp:   {k:'mvp',   l:'MVPs',   i:'⭐',c:'#ffd700',s:(a,b)=>(b.mvp||0)-(a.mvp||0)},
+    mvp:   {k:'mvp',   l:'MVPs',   i:'⭐',c:'#ffd700',s:(a,b)=>b.mvp-a.mvp},
     streak:{k:'streak',l:'Racha',  i:'🔥',c:'#ff6b35',s:(a,b)=>b.streak-a.streak},
   };
-  const cfg=cfgs[mode]||cfgs.points;
+  const cfg=cfgs[mode]||cfgs.wins;
   const sorted=[...enriched].sort(cfg.s);
-  const legend=mode==='points'?`<div class="pts-legend"><span>🎯 V=<b style="color:#00ff88">3pts</b></span><span>⚖️ E=<b style="color:#ffd700">1pt</b></span><span>💀 D=<b style="color:#ff4757">0pts</b></span></div>`:'';
-  cont.innerHTML=legend+sorted.map((p,i)=>{
+  cont.innerHTML=head+sorted.map((p,i)=>{
     const pc=i===0?'gold':i===1?'silver':i===2?'bronze':'';
-    const sb=streakBadge(p.streak);
-    const extra=mode==='points'?`<div style="display:flex;gap:7px;margin-top:3px;font-size:11px"><span style="color:#00ff88">🏆${p.wins||0}V</span><span style="color:#ffd700">⚖️${p.draws}E</span><span style="color:#ff4757">💀${p.losses}D</span><span style="color:var(--mu)">📊${p.played||0}PJ</span>${p.bonusPoints?`<span style="color:#a55eea">➕${p.bonusPoints}ext</span>`:''}</div>`:'';
     return`<div class="rank-row" onclick="openProfile('${p._key}')" style="cursor:pointer">
       <div class="rank-pos ${pc}">${i+1}</div>${ava(p,36)}
-      <div class="ri"><div class="rn">${p.name} ${sb}</div><div class="rs">${p.pos||''} · ${p.played||0} partidos</div>${extra}</div>
+      <div class="ri"><div class="rn">${esc(p.name)} ${streakBadge(p.streak)}</div><div class="rs">${esc(p.pos||'')} · ${p.played} partidos</div></div>
       <div style="text-align:center"><div style="font-family:var(--fd);font-size:17px;color:${cfg.c}">${cfg.i}${p[cfg.k]||0}</div><div style="font-size:9px;color:var(--mu);text-transform:uppercase">${cfg.l}</div></div>
     </div>`;}).join('');
 }
@@ -1034,30 +1111,118 @@ window.handleChatKey=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sen
 // ── TEMPORADAS ─────────────────────────────────────────
 function renderTemporadas(){
   document.querySelectorAll('.admin-only').forEach(e=>e.style.display=IS_ADMIN?'':'none');
-  const cont=el('temporadas-list');
-  if(!S.seasons.length){cont.innerHTML='<div class="empty-state"><div class="icon">🔄</div><p>Sin temporadas archivadas</p></div>';return;}
-  cont.innerHTML=[...S.seasons].reverse().map(s=>`
+  const cont=el('temporadas-list');const act=activeSeason();let h='';
+  if(act){
+    const ms=seasonMatches(act),t=seasonTable(act);
+    h+=`<div class="card season-live">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="live-pill"><span class="live-dot"></span> EN CURSO</span><span style="font-size:11px;color:var(--mu)">Desde ${fDate(act.startDate)}</span></div>
+      <div style="font-family:var(--fd);font-size:30px;margin:8px 0 2px">${esc(act.name)}</div>
+      <div style="font-size:12px;color:var(--mu);margin-bottom:12px">${ms.length} jornada${ms.length===1?'':'s'} jugada${ms.length===1?'':'s'}${act.initial&&Object.keys(act.initial).length?' · con puntos iniciales':''}</div>
+      ${t.length?miniTable(t.slice(0,5)):'<div class="alert alert-info">Aún no hay partidos. ¡El jueves arranca!</div>'}
+      <button class="btn btn-secondary btn-full" style="margin-top:10px" onclick="showPage('ranking',document.querySelectorAll('.nav-btn')[3])">📊 Clasificación completa</button>
+      ${IS_ADMIN?`<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-secondary" style="flex:1" onclick="openSeasonModal('edit')">✏️ Puntos iniciales</button><button class="btn btn-gold" style="flex:1" onclick="openCloseSeason()">🏁 Cerrar</button></div>`:''}
+    </div>`;
+  }else{
+    const legacy=seasonMatches(null).length;
+    h+=IS_ADMIN?`<div class="card" style="text-align:center;padding:22px 16px"><div style="font-size:38px">🏁</div><div style="font-family:var(--fd);font-size:24px;margin:4px 0">No hay temporada en curso</div><div style="font-size:12px;color:var(--mu);margin-bottom:14px">Crea una para llevar la clasificación por jornadas${legacy?`<br>(hay ${legacy} partido${legacy===1?'':'s'} guardado${legacy===1?'':'s'} sin temporada)`:''}</div><button class="btn btn-primary btn-full" onclick="openSeasonModal('new')">➕ Empezar nueva temporada</button></div>`
+      :'<div class="empty-state"><div class="icon">🏁</div><p>No hay temporada en curso</p></div>';
+  }
+  const closed=S.seasons.filter(x=>x.endDate).sort((a,b)=>(b.endDate||'').localeCompare(a.endDate||''));
+  if(closed.length) h+='<div class="section-title" style="font-size:19px;margin-top:8px"><div class="dot"></div>Palmarés</div>'+closed.map(x=>`
     <div class="card">
-      <div style="font-family:var(--fd);font-size:20px;margin-bottom:8px">🏆 ${s.name}</div>
-      <div style="font-size:12px;color:var(--mu);margin-bottom:10px">${fDate(s.startDate)} → ${fDate(s.endDate)} · ${s.totalMatches||0} partidos</div>
-      ${s.champion?`<div style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(255,215,0,.08);border-radius:10px;border:1px solid rgba(255,215,0,.2)"><div style="font-size:24px">🥇</div><div><div style="font-weight:700;font-size:14px">${s.champion}</div><div style="font-size:11px;color:var(--mu)">Campeón de la Temporada</div></div></div>`:''}
-      ${s.topScorer?`<div style="font-size:12px;color:var(--mu);margin-top:8px">⚽ Máximo Goleador: <b style="color:#00ff88">${s.topScorer}</b></div>`:''}
-      ${s.topMvp?`<div style="font-size:12px;color:var(--mu)">⭐ Más MVPs: <b style="color:#ffd700">${s.topMvp}</b></div>`:''}
+      <div style="font-family:var(--fd);font-size:21px;margin-bottom:2px">🏆 ${esc(x.name)}</div>
+      <div style="font-size:11px;color:var(--mu);margin-bottom:10px">${fDate(x.startDate)} → ${fDate(x.endDate)} · ${x.totalMatches||0} jornada${x.totalMatches===1?'':'s'}</div>
+      ${x.champion?`<div class="champ"><div style="font-size:26px">🥇</div><div><div style="font-weight:700;font-size:15px">${esc(x.champion)}</div><div style="font-size:11px;color:var(--mu)">Campeón</div></div></div>`:''}
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mu);margin-top:8px">${x.topScorer?`<span>⚽ Pichichi: <b style="color:#00ff88">${esc(x.topScorer)}</b></span>`:''}${x.topMvp?`<span>⭐ Más MVPs: <b style="color:#ffd700">${esc(x.topMvp)}</b></span>`:''}</div>
+      ${x.table?.length?`<details class="dt"><summary>Ver clasificación final</summary>${miniTable(x.table.map(r=>({...r,_key:r.key,photo:S.players[r.key]?.photo})))}</details>`:''}
     </div>`).join('');
+  cont.innerHTML=h;
 }
-window.closeSeason=()=>adminOnly(async()=>{
-  const players=pArr();const matches=mArr();
-  if(!matches.length){toast('⚠️ No hay partidos en esta temporada');return;}
-  const champion=players.sort((a,b)=>calcPts(b._key)-calcPts(a._key))[0]?.name||'N/A';
-  const topScorer=players.sort((a,b)=>(b.goals||0)-(a.goals||0))[0]?.name||'N/A';
-  const topMvp=players.sort((a,b)=>(b.mvp||0)-(a.mvp||0))[0]?.name||'N/A';
-  const seasonName=el('season-name').value.trim()||`Temporada ${new Date().getFullYear()}`;
-  await push(ref(db,'seasons'),{name:seasonName,endDate:todayStr(),startDate:matches.sort((a,b)=>new Date(a.date)-new Date(b.date))[0]?.date||'',totalMatches:matches.length,champion,topScorer,topMvp});
-  // Reset stats
-  const upd={matches:null};
-  players.forEach(p=>{upd[`players/${p._key}/goals`]=0;upd[`players/${p._key}/wins`]=0;upd[`players/${p._key}/played`]=0;upd[`players/${p._key}/mvp`]=0;upd[`players/${p._key}/captained`]=0;upd[`players/${p._key}/assists`]=0;upd[`players/${p._key}/bonusPoints`]=0;upd[`players/${p._key}/yellowCards`]=0;upd[`players/${p._key}/redCards`]=0;});
+
+// Crear / editar temporada
+let seasonModalMode='new', seasonStartMode='zero';
+window.openSeasonModal=mode=>adminOnly(()=>{
+  const act=activeSeason();
+  if(mode==='new'&&act){toast('⚠️ Ya hay una temporada en curso');return;}
+  if(mode==='edit'&&!act)return;
+  seasonModalMode=mode;
+  el('season-modal-title').textContent=mode==='edit'?'✏️ Puntos iniciales':'🆕 Nueva Temporada';
+  el('season-new-fields').style.display=mode==='edit'?'none':'';
+  el('season-save-btn').textContent=mode==='edit'?'💾 Guardar puntos':'🚀 Empezar temporada';
+  if(mode==='new'){el('season-new-name').value=defaultSeasonName();el('season-new-start').value=todayStr();setSeasonStartMode('zero');}
+  else{renderInitialTable(act.initial||{});el('season-initial-wrap').style.display='';}
+  openM('modal-season');
+});
+window.setSeasonStartMode=m=>{
+  seasonStartMode=m;
+  const legacy=seasonMatches(null).length;
+  const opts=[['zero','🆕 Empezar de cero','Todos los jugadores a 0 puntos'],['manual','✍️ Ya está empezada','Escribo los puntos que lleva cada jugador'],...(legacy?[['legacy','📋 Usar los partidos ya guardados',`Se meten en esta temporada los ${legacy} partidos registrados`]]:[])];
+  el('season-modes').innerHTML=opts.map(([k,t,d])=>`<button type="button" class="mode-opt ${k===m?'on':''}" onclick="setSeasonStartMode('${k}')"><b>${t}</b><span>${d}</span></button>`).join('');
+  if(m==='manual'){
+    const ini={};pArr().forEach(p=>{const st=seasonStats(p._key,null);ini[p._key]={pts:st.pts,played:st.played,wins:st.wins,draws:st.draws,goals:st.goals};});
+    renderInitialTable(ini);el('season-initial-wrap').style.display='';
+  }else el('season-initial-wrap').style.display='none';
+};
+function renderInitialTable(ini){
+  const ps=pArr().sort((a,b)=>(ini[b._key]?.pts||0)-(ini[a._key]?.pts||0)||(a.name||'').localeCompare(b.name||''));
+  const inp=(k,f)=>`<input type="number" inputmode="numeric" class="ini-in" data-k="${k}" data-f="${f}" value="${ini[k]?.[f]||''}" placeholder="0">`;
+  el('season-initial-table').innerHTML=ps.length?`<table class="lt ini"><thead><tr><th class="nm">Jugador</th><th>Pts</th><th>PJ</th><th>V</th><th>E</th><th>G</th></tr></thead><tbody>${ps.map(p=>`<tr><td class="nm"><div class="nmw">${ava(p,22)}<div class="nmt">${esc(p.name)}</div></div></td><td>${inp(p._key,'pts')}</td><td>${inp(p._key,'played')}</td><td>${inp(p._key,'wins')}</td><td>${inp(p._key,'draws')}</td><td>${inp(p._key,'goals')}</td></tr>`).join('')}</tbody></table>`:'<div class="alert alert-info">Añade jugadores primero</div>';
+}
+function readInitialTable(){
+  const ini={};
+  document.querySelectorAll('#season-initial-table .ini-in').forEach(i=>{const v=parseInt(i.value)||0;if(v)(ini[i.dataset.k]??={})[i.dataset.f]=v;});
+  return ini;
+}
+window.saveSeason=()=>adminOnly(async()=>{
+  if(seasonModalMode==='edit'){
+    const act=activeSeason();if(!act)return;
+    await set(ref(db,'seasons/'+act._key+'/initial'),readInitialTable());
+    closeM('modal-season');toast('✅ Puntos iniciales guardados');return;
+  }
+  if(activeSeason()){toast('⚠️ Ya hay una temporada en curso');return;}
+  const name=el('season-new-name').value.trim()||defaultSeasonName();
+  const startDate=el('season-new-start').value||todayStr();
+  const legacyMs=seasonMatches(null);
+  const upd={};const id=push(ref(db,'seasons')).key;
+  const initial=seasonStartMode==='manual'?readInitialTable():{};
+  if(seasonStartMode==='legacy'){
+    legacyMs.forEach(m=>upd[`matches/${m._key}/seasonId`]=id);
+  }else{
+    // Los partidos antiguos se guardan como temporada archivada para no perderlos ni contarlos dos veces
+    if(legacyMs.length){
+      const aid=push(ref(db,'seasons')).key;
+      upd['seasons/'+aid]={name:'Partidos anteriores',startDate:legacyMs[0].date||startDate,endDate:startDate,status:'closed',...seasonSummary(null)};
+      legacyMs.forEach(m=>upd[`matches/${m._key}/seasonId`]=aid);
+    }
+    pArr().forEach(p=>{if(p.bonusPoints)upd[`players/${p._key}/bonusPoints`]=0;});
+  }
+  upd['seasons/'+id]={name,startDate,status:'active',initial,createdAt:Date.now()};
+  upd['config/activeSeason']=id;
   await update(ref(db),upd);
-  closeM('modal-close-season');toast('🏆 Temporada archivada y stats reseteadas');
+  closeM('modal-season');toast('🏁 ¡'+name+' en marcha!');
+});
+
+window.openCloseSeason=()=>adminOnly(()=>{
+  const act=activeSeason();
+  el('season-name-group').style.display=act?'none':'';
+  el('close-season-msg').innerHTML=act
+    ?`Se cerrará <b>${esc(act.name)}</b>. Quedará guardada en el palmarés con su clasificación final y todos sus partidos. Las estadísticas de los jugadores vuelven a cero.`
+    :'Se archivarán los partidos actuales como una temporada y las estadísticas de los jugadores vuelven a cero.';
+  openM('modal-close-season');
+});
+window.closeSeason=()=>adminOnly(async()=>{
+  if(S.activeMatch){toast('⚠️ Termina primero el partido en curso');return;}
+  const act=activeSeason();const ms=seasonMatches(act);
+  if(!act&&!ms.length){toast('⚠️ No hay partidos para archivar');return;}
+  const upd={};const id=act?act._key:push(ref(db,'seasons')).key;
+  const base=act?{name:act.name,startDate:act.startDate||'',initial:act.initial||null,createdAt:act.createdAt||null}
+               :{name:el('season-name').value.trim()||defaultSeasonName(),startDate:ms[0]?.date||todayStr()};
+  upd['seasons/'+id]={...base,...seasonSummary(act),status:'closed',endDate:todayStr()};
+  if(!act) ms.forEach(m=>upd[`matches/${m._key}/seasonId`]=id);
+  upd['config/activeSeason']=null;
+  pArr().forEach(p=>['goals','wins','played','mvp','captained','assists','bonusPoints','yellowCards','redCards'].forEach(f=>upd[`players/${p._key}/${f}`]=0));
+  await update(ref(db),upd);
+  closeM('modal-close-season');toast('🏆 Temporada cerrada y guardada en el palmarés');
 });
 
 
@@ -1514,7 +1679,7 @@ function formaHtml(playerKey, showLabel=false) {
 
 // ── MURO DE GLORIA Y VERGÜENZA ────────────────────────
 function renderMuro() {
-  const players = pArr().filter(p => (p.played||0) > 0);
+  const players = pArr().map(p=>({...p,...seasonStats(p._key)})).filter(p => p.played > 0);
   if (!players.length) {
     document.getElementById('muro-gloria').innerHTML =
       '<div class="empty-state"><div class="icon">🏆</div><p>Jugad partidos para ver el muro</p></div>';
@@ -1526,9 +1691,9 @@ function renderMuro() {
     ...p,
     pts:    calcPts(p._key),
     streak: calcStreak(p._key),
-    draws:  countDraws(p._key),
+    draws:  p.draws,
     forma:  getForma(p._key),
-    losses: Math.max(0,(p.played||0)-(p.wins||0)-countDraws(p._key)),
+    losses: p.losses,
     winRate: p.played>0 ? Math.round((p.wins||0)/p.played*100) : 0,
   }));
 
@@ -1930,6 +2095,56 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .toggle-slider::after{content:'';position:absolute;left:3px;top:3px;width:18px;height:18px;background:var(--mu);border-radius:50%;transition:.2s}
 .toggle input:checked+.toggle-slider{background:rgba(124,58,237,.2);border:1px solid #7c3aed}
 .toggle input:checked+.toggle-slider::after{transform:translateX(20px);background:#7c3aed}
+/* Temporadas / clasificación */
+.season-head{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--fd);font-size:19px;letter-spacing:.5px;margin-bottom:10px}
+.season-head span{font-family:var(--fb);font-size:11px;color:var(--mu);font-weight:600}
+.lt{width:100%;border-collapse:collapse;font-size:12.5px}
+.lt th{font-size:9px;color:var(--mu);text-transform:uppercase;font-weight:700;padding:6px 3px;text-align:center;letter-spacing:.4px}
+.lt td{padding:8px 3px;text-align:center;border-top:1px solid var(--b)}
+.lt tbody tr{cursor:pointer;transition:background .15s}
+.lt tbody tr:active{background:var(--s2)}
+.lt .nm{text-align:left}
+.lt .pts{font-family:var(--fd);font-size:19px;color:#ffd700}
+.lt .pos{font-family:var(--fd);font-size:16px;color:var(--mu);width:22px}
+.lt .pos-1{color:#ffd700}.lt .pos-2{color:#d8d8d8}.lt .pos-3{color:#cd7f32}
+.nmw{display:flex;align-items:center;gap:7px}
+.nmt{font-weight:600;font-size:12.5px;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fd{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:2px}
+.fd-V{background:#00ff88}.fd-E{background:#ffd700}.fd-D{background:#ff4757}
+.podium{display:flex;align-items:flex-end;gap:8px;margin:4px 0 14px}
+.pod{flex:1;min-width:0;text-align:center;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px}
+.pod-name{font-size:12px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pod-pts{font-family:var(--fd);font-size:22px;color:#ffd700;line-height:1}
+.pod-pts small{font-size:11px;color:var(--mu);margin-left:2px}
+.pod-base{width:100%;border-radius:10px 10px 0 0;font-family:var(--fd);font-size:28px;display:flex;align-items:center;justify-content:center;border:1px solid var(--b);border-bottom:none}
+.pod-1 .pod-base{height:78px;background:linear-gradient(180deg,rgba(255,215,0,.35),rgba(255,215,0,.04));color:#ffd700}
+.pod-2 .pod-base{height:54px;background:linear-gradient(180deg,rgba(216,216,216,.28),rgba(216,216,216,.04));color:#d8d8d8}
+.pod-3 .pod-base{height:40px;background:linear-gradient(180deg,rgba(205,127,50,.35),rgba(205,127,50,.04));color:#cd7f32}
+.match-card{background:var(--s);border:1px solid var(--b);border-radius:var(--r);padding:12px 14px;margin-bottom:10px}
+.mc-top{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--mu);margin-bottom:8px}
+.mc-j{background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3);border-radius:20px;padding:2px 8px;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:.5px}
+.mc-date{text-transform:capitalize}
+.mc-actions{margin-left:auto;display:flex;gap:4px}
+.mc-actions button{background:var(--s2);border:1px solid var(--b);border-radius:8px;padding:3px 7px;cursor:pointer;font-size:13px}
+.mc-score{display:flex;align-items:center;gap:8px}
+.mc-team{flex:1;font-weight:600;font-size:13px;opacity:.65}
+.mc-team.win{opacity:1;font-weight:800}
+.mc-res{font-family:var(--fd);font-size:34px;letter-spacing:2px;display:flex;gap:6px;align-items:center}
+.mc-res span{color:var(--mu);font-size:22px}
+.mc-foot{font-size:12px;color:var(--mu);margin-top:6px}
+.mc-sc{font-size:11px;color:var(--mu);margin-top:4px;line-height:1.5}
+.season-live{border-color:rgba(255,215,0,.3);background:linear-gradient(135deg,rgba(255,215,0,.07),var(--s) 60%)}
+.live-pill{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:800;letter-spacing:.8px;color:#00ff88;background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.25);border-radius:20px;padding:3px 10px}
+.champ{display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,215,0,.08);border-radius:10px;border:1px solid rgba(255,215,0,.2)}
+.dt{margin-top:10px}
+.dt summary{cursor:pointer;font-size:12px;font-weight:700;color:#a78bfa;padding:6px 0}
+.mode-opt{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:12px 14px;border-radius:12px;border:2px solid var(--b);background:var(--s2);color:var(--tx);cursor:pointer;text-align:left;margin-bottom:8px;font-family:var(--fb);font-size:14px}
+.mode-opt span{font-size:11px;color:var(--mu)}
+.mode-opt.on{border-color:#7c3aed;background:rgba(124,58,237,.14)}
+.ini-in{width:42px;background:var(--s3);border:1px solid var(--b);border-radius:6px;color:var(--tx);padding:7px 2px;text-align:center;font-size:14px;font-family:var(--fb);-moz-appearance:textfield}
+.ini-in::-webkit-inner-spin-button{-webkit-appearance:none}
+.lt.ini td{padding:5px 2px}
+.lt.ini tbody tr{cursor:default}
 </style>
 </head>
 <body>
@@ -1976,6 +2191,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <div id="home-mvp"></div>
   <div id="home-active"></div>
   <div class="stats-grid" id="home-stats"></div>
+  <div id="home-season"></div>
   <div class="section-title"><div class="dot"></div>Próximo Evento</div>
   <div id="home-next-event"></div>
   <div class="section-title"><div class="dot"></div>Últimas Noticias</div>
@@ -2007,7 +2223,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   </div>
   <div id="pane-crear">
     <div class="card">
-      <div class="form-group"><label class="form-label">Fecha</label><input type="date" class="form-input" id="match-date"></div>
+      <div class="form-group"><label class="form-label">Fecha</label><div style="display:flex;gap:8px;align-items:center"><input type="date" class="form-input" id="match-date" style="flex:1"><button type="button" class="chip" onclick="setThursday()" style="flex-shrink:0;padding:10px 12px">📅 Jueves</button></div></div>
       <div class="form-group"><label class="form-label">División</label>
         <select class="form-select" id="match-div">
           <option value="random">🎲 Aleatoria</option>
@@ -2086,10 +2302,6 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 <!-- TEMPORADAS -->
 <div class="page" id="page-temporadas">
   <div class="section-title"><div class="dot"></div>Temporadas</div>
-  <div class="admin-only" style="display:none;margin-bottom:14px">
-    <div class="alert alert-warn">⚠️ Cerrar temporada archiva el historial y <b>resetea todas las estadísticas</b>.</div>
-    <button class="btn btn-gold btn-full" onclick="openM('modal-close-season')">🏆 Cerrar Temporada Actual</button>
-  </div>
   <div id="temporadas-list"></div>
 </div>
 
@@ -2439,9 +2651,46 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <div class="modal-sheet">
     <div class="modal-handle"></div>
     <div class="modal-title">🏆 Cerrar Temporada</div>
-    <div class="alert alert-warn">⚠️ Esto archivará todos los partidos y <b>reseteará las estadísticas</b> de todos los jugadores. No se puede deshacer.</div>
-    <div class="form-group"><label class="form-label">Nombre de la temporada</label><input type="text" class="form-input" id="season-name" placeholder="Temporada 2024-25"></div>
-    <button class="btn btn-gold btn-full" onclick="closeSeason()">🏆 Archivar y Resetear</button>
+    <div class="alert alert-warn" id="close-season-msg"></div>
+    <div class="form-group" id="season-name-group"><label class="form-label">Nombre de la temporada</label><input type="text" class="form-input" id="season-name" placeholder="Temporada 2025-26"></div>
+    <div style="display:flex;gap:8px"><button class="btn btn-secondary" style="flex:1" onclick="closeM('modal-close-season')">Cancelar</button><button class="btn btn-gold" style="flex:1" onclick="closeSeason()">🏁 Cerrar temporada</button></div>
+  </div>
+</div>
+
+<!-- NEW / EDIT SEASON -->
+<div class="modal-overlay" id="modal-season" onclick="closeBg(event,'modal-season')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="season-modal-title">🆕 Nueva Temporada</div>
+    <div id="season-new-fields">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Nombre</label><input type="text" class="form-input" id="season-new-name"></div>
+        <div class="form-group"><label class="form-label">Empieza</label><input type="date" class="form-input" id="season-new-start"></div>
+      </div>
+      <label class="form-label">¿Cómo empieza?</label>
+      <div id="season-modes"></div>
+    </div>
+    <div id="season-initial-wrap" style="display:none">
+      <div style="font-size:12px;color:var(--mu);margin:4px 0 8px;line-height:1.5">Pon lo que lleva cada jugador hasta ahora. Los partidos que se jueguen a partir de hoy se suman solos.</div>
+      <div id="season-initial-table" style="max-height:46vh;overflow-y:auto;margin-bottom:12px"></div>
+    </div>
+    <button class="btn btn-primary btn-full" id="season-save-btn" onclick="saveSeason()">🚀 Empezar temporada</button>
+  </div>
+</div>
+
+<!-- EDIT MATCH -->
+<div class="modal-overlay" id="modal-edit-match" onclick="closeBg(event,'modal-edit-match')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">✏️ Editar Partido</div>
+    <input type="hidden" id="em-key">
+    <div class="form-group"><label class="form-label">Fecha</label><input type="date" class="form-input" id="em-date"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">💜 Morado</label><input type="number" class="form-input" id="em-a" min="0" inputmode="numeric"></div>
+      <div class="form-group"><label class="form-label">🟡 Amarillo</label><input type="number" class="form-input" id="em-b" min="0" inputmode="numeric"></div>
+    </div>
+    <div style="font-size:11px;color:var(--mu);margin-bottom:12px">La clasificación se recalcula sola con el nuevo resultado.</div>
+    <button class="btn btn-primary btn-full" onclick="saveEditMatch()">💾 Guardar</button>
   </div>
 </div>
 
